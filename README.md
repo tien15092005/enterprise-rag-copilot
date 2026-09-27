@@ -1,0 +1,287 @@
+# Enterprise Knowledge Copilot
+
+A production-oriented, version-aware Retrieval-Augmented Generation backend for enterprise
+knowledge. The defining product requirement is explicit retrieval and comparison across immutable
+versions of the same logical document.
+
+## Current status
+
+Phase 4 implements the first bilingual, evidence-grounded RAG baseline on top of the
+logical-document catalog and dense retrieval system:
+
+- Immutable document-version records grouped under stable logical documents.
+- Local filesystem source storage behind a replaceable storage protocol.
+- PDF, DOCX, UTF-8 TXT, and Markdown parsing without OCR.
+- Configurable deterministic token-window chunking.
+- PostgreSQL persistence for logical documents, versions, chunks, and ingestion jobs.
+- Explicit failed-ingestion state and structured API errors.
+- SHA-256 duplicate-source detection within a logical document.
+- Explicit activation: only a version marked `active` and indexed as `ready` is current.
+- Replaceable embedding and vector-store interfaces.
+- Lazy, process-cached `intfloat/multilingual-e5-small` embeddings pinned to a model revision.
+- Idempotent Qdrant upserts with deterministic chunk UUIDs and version-filter payloads.
+- Explicit vector indexing states (`not_indexed`, `indexing`, `indexed`, `failed`).
+- Dense retrieval scoped to exactly one caller-supplied document version.
+- PostgreSQL provenance validation for every Qdrant search result.
+- Explicit exact, current, all-version, and as-of scope resolution.
+- Bounded ranked evidence contexts with stable citation keys.
+- Replaceable OpenAI-compatible and optional Ollama generation providers.
+- English/Vietnamese answer-language behavior and deterministic no-evidence refusal.
+- Structured citations resolved only from evidence actually supplied to the LLM.
+
+Lexical/hybrid retrieval, RRF, reranking, version comparison, agents, and final evaluation
+benchmarking are intentionally not implemented yet.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
+approved design and phased delivery plan.
+
+## Local setup
+
+Requirements:
+
+- Python 3.12
+- Docker with Docker Compose for PostgreSQL and Qdrant integration work
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+```
+
+Run the schema migration before starting the API:
+
+```powershell
+.venv\Scripts\python -m alembic upgrade head
+.venv\Scripts\python -m uvicorn app.main:app --reload
+```
+
+The application exposes:
+
+- `GET /health` for liveness.
+- `GET /health/ready` for PostgreSQL readiness.
+- `POST /api/documents` and `GET /api/documents` for the logical-document catalog.
+- `GET /api/documents/{logical_document_id}` for document and version summaries.
+- `POST /api/documents/{logical_document_id}/versions` for multipart ingestion.
+- `GET /api/documents/{logical_document_id}/versions` for version history.
+- `GET /api/document-versions/{document_version_id}` for ingestion and chunk status.
+- `POST /api/document-versions/{document_version_id}/index` for explicit vector indexing.
+- `POST /api/retrieval/dense` for engineering/debug exact-version retrieval.
+- `POST /api/query` for version-scoped RAG answering with structured citations.
+- `GET /docs` for generated OpenAPI documentation.
+
+## Ingestion architecture
+
+```text
+multipart request
+  -> validate logical document and version metadata
+  -> stream original bytes to DocumentStorage
+  -> calculate SHA-256 checksum
+  -> persist processing version + ingestion job
+  -> select PDF/DOCX/TXT/Markdown parser
+  -> produce page/section-aware text blocks
+  -> deterministic configurable chunking
+  -> persist chunks
+  -> mark version ready or explicitly failed
+  -> optionally activate the ready version
+```
+
+Original binaries are stored under `data/uploads/` by default. PostgreSQL stores the opaque
+storage key, original filename, and checksum; it does not store source binaries. Ingestion code
+depends on the `DocumentStorage` protocol rather than filesystem paths, leaving an S3-compatible
+implementation possible later.
+
+## Document and version model
+
+A `LogicalDocument` is the stable identity of a policy, manual, or similar knowledge asset. Each
+`DocumentVersion` is an immutable source snapshot with an explicit version label, revision number,
+ordinal, language, effective dates, checksum, and lifecycle statuses. Chunks belong to exactly one
+version.
+
+The current version is never inferred from filename, timestamp, label, ordinal, or upload order.
+It is only the single version explicitly marked `active` while its indexing status is `ready`. A
+new active version explicitly supersedes the previous active version. Changing ready source
+content or source-semantic metadata requires creating a new version/revision.
+
+## Embeddings and dense retrieval
+
+The default local provider is `intfloat/multilingual-e5-small` (384 dimensions), selected as a
+lightweight multilingual baseline for English and Vietnamese. Its repository revision is pinned
+in configuration. The provider applies E5's required conventions before encoding:
+
+- User search text: `query: <text>`
+- Stored chunk text: `passage: <text>`
+
+Both query and passage vectors are L2-normalized. The model loads lazily on first indexing or
+retrieval use and is reused for later requests; application import and unrelated tests do not load
+or download model weights. Tests inject a deterministic fake through the `EmbeddingProvider`
+boundary.
+
+```text
+ready DocumentVersion -> PostgreSQL chunks -> passage embeddings
+  -> deterministic Qdrant upsert -> vector_index_status=indexed
+
+query + explicit document_version_id -> query embedding
+  -> Qdrant cosine search with mandatory version filter
+  -> PostgreSQL chunk hydration and provenance validation -> ranked candidates
+```
+
+PostgreSQL is authoritative for source snapshots, chunks, text, lifecycle state, and provenance.
+Qdrant owns only reconstructable embeddings plus the minimal filter/citation payload. Re-indexing
+uses each chunk UUID as its point ID, so it replaces the same points instead of creating duplicates.
+An indexing failure is recorded explicitly and never marks the version indexed.
+
+## End-to-end RAG flow
+
+```text
+question + selector
+  -> explicit version-scope resolution
+  -> dense Qdrant retrieval with mandatory version filters
+  -> PostgreSQL provenance validation and metadata hydration
+  -> bounded ranked evidence context with [S1], [S2], ... keys
+  -> configured LLM provider
+  -> citation-key validation
+  -> grounded answer, structured citations, resolved scope, and timings
+```
+
+Supported selectors are:
+
+- `exact`: one explicit immutable `document_version_id`.
+- `current`: only the single version explicitly marked `active`, ingestion-ready, and
+  vector-indexed. There is no timestamp, filename, label, ordinal, or upload-order fallback.
+- `all`: all ingestion-ready and vector-indexed versions of the selected logical document.
+- `as_of`: the unique ready/indexed version whose explicit effective interval contains the
+  requested timestamp. Missing and overlapping intervals return domain errors.
+
+The context builder preserves dense ranking and stops at `RAG_MAX_CONTEXT_CHARACTERS`, retaining
+higher-ranked evidence first. Each included chunk receives a stable response-local key such as
+`[S1]`. The prompt requires evidence-only answers and these keys; returned citation objects are
+resolved from the supplied evidence rather than trusting model-produced metadata. Unknown or
+missing citation keys cause a structured provider-response error.
+
+Questions containing Vietnamese orthographic markers are answered in Vietnamese; other questions
+default to English. Source excerpts remain in their original language. If retrieval produces no
+usable evidence, the service returns a deterministic language-appropriate insufficient-evidence
+response without calling the LLM. No unvalidated similarity threshold is used in this phase.
+
+Set `retrieval_only` to `true` on `/api/query` to resolve any supported version selector and return
+the bounded evidence in `citations` without calling an LLM. In this mode `answer` is `null`,
+generation latency is zero, and no LLM provider needs to be configured.
+
+## LLM providers
+
+Set `LLM_PROVIDER=openai_compatible` with `OPENAI_API_KEY` and `OPENAI_MODEL`, or set
+`LLM_PROVIDER=ollama` with `OLLAMA_MODEL`. Ollama remains optional and no model is downloaded
+automatically. Provider calls are isolated behind `LLMProvider`; tests and controlled verification
+use a deterministic fake. Generation latency and provider token usage are returned when available.
+
+Model caches default to `data/model_cache`, which keeps project-local development data on the
+project drive. On Windows, `EMBEDDING_CACHE_DIRECTORY` and optionally `HF_HOME` may instead point
+to `D:\AI_Cache\huggingface`. Existing caches are not moved or deleted automatically.
+
+## Sample API usage
+
+Create a logical document:
+
+```powershell
+$document = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/documents `
+  -ContentType application/json `
+  -Body '{"stable_key":"hr-policy","title":"HR Policy","domain":"HR"}'
+```
+
+Upload and activate a version with `curl.exe`:
+
+```powershell
+curl.exe -X POST "http://localhost:8000/api/documents/$($document.logical_document_id)/versions" `
+  -F "file=@data/samples/employee_handbook_en.md;type=text/markdown" `
+  -F "version_label=2026" `
+  -F "version_ordinal=1" `
+  -F "revision_number=1" `
+  -F "language=en" `
+  -F "activate=true" `
+  -F "chunk_size=400" `
+  -F "chunk_overlap=50"
+```
+
+Index that version and run an exact-version dense search:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/document-versions/$versionId/index"
+
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/retrieval/dense `
+  -ContentType application/json `
+  -Body (@{
+    query = "How many remote-work days are allowed?"
+    document_version_id = $versionId
+    top_k = 5
+  } | ConvertTo-Json)
+```
+
+Ask the explicitly active current version:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/query `
+  -ContentType application/json `
+  -Body (@{
+    question = "How many remote-work days are allowed?"
+    logical_document_id = $document.logical_document_id
+    version_selector = @{ kind = "current" }
+    top_k = 5
+    debug = $false
+  } | ConvertTo-Json -Depth 4)
+```
+
+For exact scope, use
+`{"kind":"exact","document_version_id":"<uuid>"}`. For historical scope, use
+`{"kind":"as_of","as_of":"2026-01-15T00:00:00Z"}`. The `all` selector uses
+`{"kind":"all"}`.
+
+## Migrations
+
+```powershell
+# Apply
+.venv\Scripts\python -m alembic upgrade head
+
+# Revert Phase 2 schema
+.venv\Scripts\python -m alembic downgrade base
+
+# Reapply
+.venv\Scripts\python -m alembic upgrade head
+```
+
+The PostgreSQL migration also installs database triggers that prevent mutation of ready source
+snapshots and their chunks. Application-level checks provide the same source-version protection
+for ORM writes.
+
+## Verification
+
+```powershell
+.venv\Scripts\python -m ruff format --check app tests
+.venv\Scripts\python -m ruff check app tests
+.venv\Scripts\python -m mypy app
+.venv\Scripts\python -m pytest
+docker compose config
+```
+
+No API keys belong in the repository. Copy `.env.example` to `.env` and provide secrets locally.
+
+## Known limitations
+
+- Ingestion executes synchronously in the API process; background workers are future work.
+- PDF parsing handles embedded text only. Scanned/image-only PDFs return an explicit unsupported
+  content error because OCR is outside Phase 2.
+- DOCX page numbers are unavailable because the document format does not retain reliable rendered
+  pagination.
+- TXT and Markdown must be UTF-8 encoded.
+- Chunking uses transparent whitespace-token windows and does not claim linguistic optimality.
+- Deletion endpoints and retention policies are deferred; stored failed-upload sources remain
+  available for diagnosis.
+- Retrieval remains dense-only. PostgreSQL lexical search, hybrid fusion/RRF, and reranking are not
+  implemented.
+- Qdrant and PostgreSQL do not share a transaction. Explicit failed state and idempotent point IDs
+  make retries safe, while reconciliation tooling remains future work.
+- Dense retrieval quality has only been smoke-tested with the included English and Vietnamese
+  samples; no benchmark or evaluation score is claimed.
+- Citation keys are stable within one response/context build, not permanent identifiers across
+  different queries; chunk UUIDs provide the persistent evidence identity.
+- Version comparison, agents, and final evaluation benchmarking are not implemented.
