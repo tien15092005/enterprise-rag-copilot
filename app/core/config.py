@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     dense_candidate_limit: int = Field(default=20, ge=1, le=100)
     lexical_candidate_limit: int = Field(default=20, ge=1, le=100)
     rrf_k: int = Field(default=60, ge=1, le=1000)
+    reranker_provider: Literal["cross_encoder"] = "cross_encoder"
+    reranker_model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    reranker_model_revision: str = "1427fd652930e4ba29e8149678df786c240d8825"
+    reranker_device: str = "cpu"
+    reranker_batch_size: int = Field(default=8, ge=1, le=128)
+    reranker_max_length: int = Field(default=512, ge=32, le=8192)
+    reranker_cache_directory: str = "data/model_cache"
+    rerank_candidate_limit: int = Field(default=20, ge=1, le=100)
+    rerank_final_top_k: int = Field(default=5, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_reranking_limits(self) -> Settings:
+        if self.rerank_final_top_k > self.rerank_candidate_limit:
+            raise ValueError("RERANK_FINAL_TOP_K cannot exceed RERANK_CANDIDATE_LIMIT")
+        return self
 
 
 @lru_cache

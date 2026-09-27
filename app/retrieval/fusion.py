@@ -69,7 +69,7 @@ def reciprocal_rank_fusion(
         )
         for state in states.values()
     ]
-    return sorted(
+    ordered = sorted(
         fused,
         key=lambda candidate: (
             -candidate.rrf_score,
@@ -77,6 +77,9 @@ def reciprocal_rank_fusion(
             str(candidate.chunk_id),
         ),
     )
+    return [
+        candidate.model_copy(update={"rrf_rank": rank}) for rank, candidate in enumerate(ordered, 1)
+    ]
 
 
 def _validate_same_chunk(

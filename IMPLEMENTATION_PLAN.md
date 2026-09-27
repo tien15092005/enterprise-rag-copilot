@@ -243,6 +243,10 @@ python -m mypy app
 
 ## Phase 7 - Reranker
 
+Status: implemented. The pinned multilingual cross-encoder is lazy and injectable; the
+`hybrid_rerank` mode bounds the post-RRF pool, preserves all retrieval metadata and immutable
+version provenance, exposes separate latency, and supports retrieval-only execution.
+
 ### Objective
 
 Introduce a replaceable reranker interface, optional multilingual local cross-encoder selected using English/Vietnamese evaluation, deterministic fake/no-op implementations, bounded candidate reranking, and separate reranker latency/score reporting.

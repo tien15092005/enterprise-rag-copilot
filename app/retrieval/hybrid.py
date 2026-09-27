@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from time import perf_counter
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.models.retrieval import (
@@ -15,6 +16,9 @@ from app.retrieval.errors import RetrievalProvenanceError
 from app.retrieval.fusion import reciprocal_rank_fusion
 from app.retrieval.lexical import LexicalRetrievalService
 from app.retrieval.service import DenseRetrievalService
+
+if TYPE_CHECKING:
+    from app.retrieval.reranked import RerankedRetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +129,11 @@ class ModeAwareRetrievalService:
         self,
         dense: DenseRetrievalService,
         hybrid: HybridRetrievalService,
+        reranked: RerankedRetrievalService | None = None,
     ) -> None:
         self._dense = dense
         self._hybrid = hybrid
+        self._reranked = reranked
 
     async def search_versions(
         self,
@@ -138,6 +144,10 @@ class ModeAwareRetrievalService:
     ) -> RetrievalBatch:
         if mode is RetrievalMode.HYBRID:
             return await self._hybrid.search_versions(query, document_version_ids, top_k)
+        if mode is RetrievalMode.HYBRID_RERANK:
+            if self._reranked is None:
+                raise ValueError("hybrid reranking service is not configured")
+            return await self._reranked.search_versions(query, document_version_ids, top_k)
         dense: DenseRetrievalBatch = await self._dense.search_versions(
             query, document_version_ids, top_k
         )

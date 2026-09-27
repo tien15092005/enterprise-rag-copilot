@@ -20,6 +20,8 @@ from app.models.retrieval import (
     DenseRetrievalCandidate,
     HybridRetrievalBatch,
     HybridRetrievalCandidate,
+    RerankedRetrievalBatch,
+    RerankedRetrievalCandidate,
     RetrievalMode,
 )
 from app.models.versioning import (
@@ -105,6 +107,38 @@ class FakeHybridRetrieval:
             dense_candidate_count=1,
             lexical_candidate_count=1,
             merged_duplicate_count=1,
+        )
+
+
+class FakeRerankedRetrieval:
+    def __init__(self, candidate: RerankedRetrievalCandidate) -> None:
+        self.candidate = candidate
+        self.requested_mode: RetrievalMode | None = None
+
+    async def search_versions(
+        self,
+        _query: str,
+        document_version_ids: list[object],
+        _top_k: int,
+        mode: RetrievalMode,
+    ) -> RerankedRetrievalBatch:
+        self.requested_mode = mode
+        return RerankedRetrievalBatch(
+            document_version_ids=document_version_ids,
+            candidates=[self.candidate],
+            embedding_latency_ms=1,
+            dense_latency_ms=2,
+            lexical_latency_ms=3,
+            fusion_latency_ms=0.5,
+            reranking_latency_ms=4,
+            total_latency_ms=10.5,
+            dense_candidate_count=1,
+            lexical_candidate_count=1,
+            merged_duplicate_count=1,
+            pre_rerank_candidate_count=1,
+            post_rerank_candidate_count=1,
+            reranker_model="fake-multilingual",
+            reranker_revision="pinned",
         )
 
 
@@ -364,6 +398,60 @@ async def test_retrieval_only_hybrid_preserves_fusion_debug(app: Any, settings: 
 
 
 @pytest.mark.asyncio
+async def test_retrieval_only_rerank_preserves_all_scores_and_skips_llm(
+    app: Any, settings: Settings
+) -> None:
+    database: Database = app.state.database
+    logical_document_id, version = await ready_scope(database)
+    base = make_candidate(version, "Known reranked evidence")
+    retrieval = FakeRerankedRetrieval(
+        RerankedRetrievalCandidate(
+            chunk_id=base.chunk_id,
+            document_version_id=base.document_version_id,
+            logical_document_id=base.logical_document_id,
+            text=base.text,
+            ordinal=base.ordinal,
+            page=base.page,
+            section_path=base.section_path,
+            language=base.language,
+            dense_rank=3,
+            dense_score=0.7,
+            lexical_rank=2,
+            lexical_score=0.4,
+            rrf_score=0.03,
+            rrf_rank=2,
+            reranker_score=1.75,
+            reranker_rank=1,
+        )
+    )
+    service, session = await build_service(database, retrieval, None, settings)  # type: ignore[arg-type]
+    try:
+        result = await service.answer(
+            QueryRequest(
+                question="What does the policy say?",
+                logical_document_id=logical_document_id,
+                retrieval_mode=RetrievalMode.HYBRID_RERANK,
+                retrieval_only=True,
+                debug=True,
+            )
+        )
+    finally:
+        await session.close()
+
+    citation = result.citations[0]
+    assert result.answer is None
+    assert retrieval.requested_mode is RetrievalMode.HYBRID_RERANK
+    assert citation.retrieval_score == 1.75
+    assert citation.dense_rank == 3
+    assert citation.lexical_rank == 2
+    assert citation.rrf_rank == 2
+    assert citation.reranker_rank == 1
+    assert citation.reranker_score == 1.75
+    assert result.timing.reranking_ms == 4
+    assert result.timing.generation_ms == 0
+
+
+@pytest.mark.asyncio
 async def test_generation_without_llm_reports_configuration_error(
     app: Any, settings: Settings
 ) -> None:
@@ -432,7 +520,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                 question="Question",
                 logical_document_id=logical_document_id,
                 version_selector=QueryVersionSelector(kind=VersionSelectorKind.ALL),
-                retrieval_mode=RetrievalMode.HYBRID,
+                retrieval_mode=RetrievalMode.HYBRID_RERANK,
             )
         )
         assert [citation.document_version_id for citation in all_result.citations] == [
@@ -448,7 +536,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                 version_selector=QueryVersionSelector(
                     kind=VersionSelectorKind.EXACT, document_version_id=v1.document_version_id
                 ),
-                retrieval_mode=RetrievalMode.HYBRID,
+                retrieval_mode=RetrievalMode.HYBRID_RERANK,
             )
         )
         assert exact_result.citations[0].document_version_id == v1.document_version_id
@@ -457,7 +545,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
             QueryRequest(
                 question="Question",
                 logical_document_id=logical_document_id,
-                retrieval_mode=RetrievalMode.HYBRID,
+                retrieval_mode=RetrievalMode.HYBRID_RERANK,
             )
         )
         assert current_result.citations[0].document_version_id == v2.document_version_id
@@ -470,7 +558,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                     kind=VersionSelectorKind.AS_OF,
                     as_of=datetime(2025, 6, 1, tzinfo=UTC),
                 ),
-                retrieval_mode=RetrievalMode.HYBRID,
+                retrieval_mode=RetrievalMode.HYBRID_RERANK,
             )
         )
         assert as_of_result.citations[0].document_version_id == v1.document_version_id

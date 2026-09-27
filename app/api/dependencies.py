@@ -17,8 +17,10 @@ from app.ingestion.chunker import TokenWindowChunker
 from app.ingestion.parsers import ParserRegistry
 from app.ingestion.service import DocumentCatalogService, IngestionService
 from app.ingestion.storage import DocumentStorage
+from app.reranking.base import Reranker
 from app.retrieval.hybrid import HybridRetrievalService, ModeAwareRetrievalService
 from app.retrieval.lexical import LexicalRetrievalService
+from app.retrieval.reranked import RerankedRetrievalService
 from app.retrieval.service import DenseRetrievalService, VectorIndexingService
 from app.retrieval.version_scope import VersionScopeResolver
 from app.vector_store.base import VectorStore
@@ -56,6 +58,10 @@ def get_embedding_provider(request: Request) -> EmbeddingProvider:
 
 def get_vector_store(request: Request) -> VectorStore:
     return cast(VectorStore, request.app.state.vector_store)
+
+
+def get_reranker(request: Request) -> Reranker:
+    return cast(Reranker, request.app.state.reranker)
 
 
 def get_llm_provider(request: Request) -> LLMProvider:
@@ -142,10 +148,16 @@ async def get_rag_service(request: Request) -> AsyncIterator[RagAnswerService]:
             lexical_candidate_limit=settings.lexical_candidate_limit,
             rrf_k=settings.rrf_k,
         )
+        reranked = RerankedRetrievalService(
+            hybrid,
+            get_reranker(request),
+            candidate_limit=settings.rerank_candidate_limit,
+            final_top_k=settings.rerank_final_top_k,
+        )
         yield RagAnswerService(
             session=session,
             scope_resolver=VersionScopeResolver(session),
-            retrieval=ModeAwareRetrievalService(dense, hybrid),
+            retrieval=ModeAwareRetrievalService(dense, hybrid, reranked),
             context_builder=EvidenceContextBuilder(
                 get_request_settings(request).rag_max_context_characters,
                 get_request_settings(request).citation_excerpt_max_characters,

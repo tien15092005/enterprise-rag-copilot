@@ -192,10 +192,10 @@ Retrieval remains explicit and staged:
 5. Optional reranker scores the fused candidates and returns the configured `rerank_top_n`.
 6. Context builder enforces a context budget and formats stable citation identifiers that include version provenance.
 
-Phase 6 implements steps 1 through 4. `/api/query` exposes `dense` and `hybrid` retrieval modes;
-`dense` remains the compatibility default until evaluation supports changing it. Query settings
-bound dense and lexical branch candidates and expose the RRF constant. Step 5 remains deferred to
-Phase 7.
+Phase 7 implements steps 1 through 5. `/api/query` exposes `dense`, `hybrid`, and
+`hybrid_rerank` retrieval modes; `dense` remains the compatibility default until evaluation
+supports changing it. Query settings bound dense/lexical branches, expose the RRF constant, bound
+the post-fusion reranker pool, and cap final evidence count.
 
 PostgreSQL full-text search is the implemented lexical baseline. Expression GIN indexes cover
 English and simple configurations without introducing Elasticsearch/OpenSearch. PostgreSQL's
@@ -211,7 +211,30 @@ constant is 60 and remains an evaluation parameter.
 
 ### Reranking
 
-A `Reranker` interface accepts a query and retrieved candidates. The selected default must support both English and Vietnamese; a multilingual cross-encoder will be chosen and measured during Phase 7 rather than fixed during Phase 0. A no-op implementation keeps reranking optional and tests deterministic. Reranker scores are retained separately from original retrieval scores.
+A replaceable `Reranker` interface accepts a query and an already scope-validated, bounded fused
+candidate list. It returns the same candidate identities with a relevance score and final rank.
+The surrounding pipeline rejects unknown or duplicated chunks and changed version provenance, so
+reranking can never widen the resolved version scope. Dense, lexical, and RRF metadata remain
+attached to every candidate.
+
+The Phase 7 baseline is `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`, pinned to commit
+`1427fd652930e4ba29e8149678df786c240d8825`. It is an Apache-2.0, 118M-parameter multilingual
+cross-encoder with English and Vietnamese in its declared mMARCO language set. It is preferred for
+this portfolio baseline over Jina v2 multilingual (278M and non-commercial model license) and BGE
+reranker v2 M3 (568M) because its smaller working set and bounded batch are more reasonable for
+local CPU use. Jina offers longer context and BGE offers a stronger/heavier multilingual family;
+both remain legitimate future experiments. No quality gain is claimed without Phase 8 metrics.
+
+The model object is created lazily and cached in-process. The configured repository revision,
+device, batch size, maximum sequence length, and cache directory are explicit. Standard tests use
+a deterministic fake; an external opt-in test exercises the pinned real model. Scores remain raw
+model relevance scores, not probabilities. Provider errors fail the request with a structured
+`reranker_failed` error rather than silently changing retrieval semantics.
+
+Candidate retrieval and reranking are distinct: Qdrant/PostgreSQL/RRF maximize a small candidate
+pool; the cross-encoder then spends more compute jointly attending to each query/passage pair and
+selects final evidence; generation consumes only that evidence. Reranking after RRF lets both
+semantic and exact-token evidence compete before the expensive model runs.
 
 ### Generation and citations
 

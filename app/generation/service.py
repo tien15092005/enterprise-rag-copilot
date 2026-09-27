@@ -25,7 +25,12 @@ from app.models.query import (
     ResolvedScope,
     TokenUsage,
 )
-from app.models.retrieval import HybridRetrievalBatch, RetrievalBatch, RetrievalCandidate
+from app.models.retrieval import (
+    HybridRetrievalBatch,
+    RerankedRetrievalBatch,
+    RetrievalBatch,
+    RetrievalCandidate,
+)
 from app.models.versioning import DocumentLanguage
 from app.retrieval.hybrid import ModeAwareRetrievalService
 from app.retrieval.version_scope import VersionScopeResolver
@@ -153,6 +158,7 @@ class RagAnswerService:
                 retrieval_ms=self._retrieval_latency(retrieval_result),
                 lexical_retrieval_ms=self._lexical_latency(retrieval_result),
                 fusion_ms=self._fusion_latency(retrieval_result),
+                reranking_ms=self._reranking_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=generation_ms,
                 total_ms=total_ms,
@@ -264,6 +270,7 @@ class RagAnswerService:
                 retrieval_ms=self._retrieval_latency(retrieval_result),
                 lexical_retrieval_ms=self._lexical_latency(retrieval_result),
                 fusion_ms=self._fusion_latency(retrieval_result),
+                reranking_ms=self._reranking_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=0,
                 total_ms=total_ms,
@@ -313,6 +320,7 @@ class RagAnswerService:
                 retrieval_ms=self._retrieval_latency(retrieval_result),
                 lexical_retrieval_ms=self._lexical_latency(retrieval_result),
                 fusion_ms=self._fusion_latency(retrieval_result),
+                reranking_ms=self._reranking_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=0,
                 total_ms=total_ms,
@@ -325,17 +333,29 @@ class RagAnswerService:
 
     @staticmethod
     def _retrieval_latency(result: RetrievalBatch) -> float:
-        if isinstance(result, HybridRetrievalBatch):
+        if isinstance(result, (HybridRetrievalBatch, RerankedRetrievalBatch)):
             return result.total_latency_ms
         return result.retrieval_latency_ms
 
     @staticmethod
     def _lexical_latency(result: RetrievalBatch) -> float:
-        return result.lexical_latency_ms if isinstance(result, HybridRetrievalBatch) else 0
+        return (
+            result.lexical_latency_ms
+            if isinstance(result, (HybridRetrievalBatch, RerankedRetrievalBatch))
+            else 0
+        )
 
     @staticmethod
     def _fusion_latency(result: RetrievalBatch) -> float:
-        return result.fusion_latency_ms if isinstance(result, HybridRetrievalBatch) else 0
+        return (
+            result.fusion_latency_ms
+            if isinstance(result, (HybridRetrievalBatch, RerankedRetrievalBatch))
+            else 0
+        )
+
+    @staticmethod
+    def _reranking_latency(result: RetrievalBatch) -> float:
+        return result.reranking_latency_ms if isinstance(result, RerankedRetrievalBatch) else 0
 
 
 def detect_question_language(question: str) -> DocumentLanguage:

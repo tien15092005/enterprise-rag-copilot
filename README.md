@@ -107,7 +107,7 @@ It is only the single version explicitly marked `active` while its indexing stat
 new active version explicitly supersedes the previous active version. Changing ready source
 content or source-semantic metadata requires creating a new version/revision.
 
-## Dense, lexical, and hybrid retrieval
+## Dense, lexical, hybrid, and reranked retrieval
 
 The default local provider is `intfloat/multilingual-e5-small` (384 dimensions), selected as a
 lightweight multilingual baseline for English and Vietnamese. Its repository revision is pinned
@@ -145,15 +145,40 @@ resolved version IDs, then fuses their ranks with `1 / (RRF_K + rank)`. The defa
 a conventional starting point, not a claim of global optimality. Duplicate chunks are merged by
 `chunk_id`; debug citation metadata retains dense rank/score, lexical rank/score, and final RRF
 score. Raw cosine and PostgreSQL scores are never averaged. `/api/query` accepts
-`retrieval_mode: "dense" | "hybrid"`; dense remains the default for compatibility until evaluation
-justifies changing it. Reranking is not implemented in Phase 6.
+`retrieval_mode: "dense" | "hybrid" | "hybrid_rerank"`; dense remains the default for
+compatibility until evaluation justifies changing it.
+
+`hybrid_rerank` takes the bounded post-RRF pool, scores query/passage pairs with the local
+cross-encoder, and returns only the configured final top K. Reranking can reorder or remove those
+candidates but cannot introduce chunks, change immutable version provenance, or discard the dense,
+lexical, or RRF scores. The response timing separates dense, lexical, fusion, and reranking work.
+Debug citations expose dense rank/score, lexical rank/score, RRF rank/score, and reranker
+rank/score; raw reranker outputs are relevance scores and are not presented as probabilities.
+
+The selected baseline is
+[`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`](https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1),
+pinned to revision `1427fd652930e4ba29e8149678df786c240d8825`. It is an Apache-2.0,
+118M-parameter multilingual MiniLM cross-encoder trained on mMARCO; its declared language set
+includes English and Vietnamese. It is expected to be usable on CPU for a small candidate pool,
+but each query/passage pair requires a joint forward pass, so it is slower and uses more memory
+than rank fusion. The model loads lazily once per process and standard tests inject a fake.
+
+Alternatives considered were
+[`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual)
+(278M parameters, longer context and strong multilingual results, but a larger CPU footprint and
+CC-BY-NC-4.0 weights) and
+[`BAAI/bge-reranker-v2-m3`](https://huggingface.co/BAAI/bge-reranker-v2-m3)
+(568M parameters, Apache-2.0 and multilingual, but materially heavier for this CPU-oriented
+portfolio baseline). Model support does not establish quality improvement; Phase 8 evaluation is
+required before making that claim.
 
 ## End-to-end RAG flow
 
 ```text
 question + selector
   -> explicit version-scope resolution
-  -> dense Qdrant retrieval with mandatory version filters
+  -> dense Qdrant + optional PostgreSQL lexical retrieval with identical version filters
+  -> optional RRF fusion -> optional bounded multilingual reranking
   -> PostgreSQL provenance validation and metadata hydration
   -> bounded ranked evidence context with [S1], [S2], ... keys
   -> configured LLM provider
@@ -196,7 +221,8 @@ response without calling the LLM. No unvalidated similarity threshold is used in
 Set `retrieval_only` to `true` on `/api/query` to resolve any supported version selector and return
 the bounded evidence in `citations` without calling an LLM. In this mode `answer` is `null`,
 generation latency is zero, and no LLM provider needs to be configured. Debug validation is marked
-`not_applicable` because no model-produced keys exist.
+`not_applicable` because no model-produced keys exist. When `retrieval_mode` is `hybrid_rerank`,
+the complete retrieval and reranking stages still execute.
 
 ## LLM providers
 
@@ -205,9 +231,11 @@ Set `LLM_PROVIDER=openai_compatible` with `OPENAI_API_KEY` and `OPENAI_MODEL`, o
 automatically. Provider calls are isolated behind `LLMProvider`; tests and controlled verification
 use a deterministic fake. Generation latency and provider token usage are returned when available.
 
-Model caches default to `data/model_cache`, which keeps project-local development data on the
-project drive. On Windows, `EMBEDDING_CACHE_DIRECTORY` and optionally `HF_HOME` may instead point
-to `D:\AI_Cache\huggingface`. Existing caches are not moved or deleted automatically.
+Embedding and reranker caches default to `data/model_cache`, which resolves beneath this project's
+`D:` directory. On Windows, `EMBEDDING_CACHE_DIRECTORY`, `RERANKER_CACHE_DIRECTORY`, and optionally
+`HF_HOME` may instead point to `D:\AI_Cache\huggingface`. Inspect the resolved path before opting
+into the real-model test. No reranker is downloaded automatically by the standard test suite, and
+existing caches are not moved or deleted automatically.
 
 ## Sample API usage
 
@@ -310,7 +338,8 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
 - PostgreSQL `simple` search is only a transparent Vietnamese lexical baseline; it has no
   Vietnamese stemmer and may miss differently segmented or inflected terms.
 - Hybrid candidate limits and `RRF_K` have not been tuned by the later evaluation phase.
-- Reranking is not implemented.
+- Reranker candidate/final limits, latency, and English/Vietnamese quality have not been
+  benchmark-tuned; no measured improvement over hybrid retrieval is claimed yet.
 - Qdrant and PostgreSQL do not share a transaction. Explicit failed state and idempotent point IDs
   make retries safe, while reconciliation tooling remains future work.
 - Dense retrieval quality has only been smoke-tested with the included English and Vietnamese

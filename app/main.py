@@ -19,6 +19,7 @@ from app.generation.providers import create_llm_provider
 from app.ingestion.chunker import TokenWindowChunker
 from app.ingestion.parsers import DocxParser, MarkdownParser, ParserRegistry, PdfParser, TextParser
 from app.ingestion.storage import LocalFilesystemStorage
+from app.reranking import create_reranker
 from app.vector_store import QdrantVectorStore
 
 
@@ -34,6 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     chunker = TokenWindowChunker()
     embeddings = create_embedding_provider(app_settings)
     llm_provider = create_llm_provider(app_settings)
+    reranker = create_reranker(app_settings)
     vector_store = QdrantVectorStore(
         url=app_settings.qdrant_url,
         collection_name=app_settings.qdrant_collection,
@@ -66,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.chunker = chunker
     application.state.embedding_provider = embeddings
     application.state.llm_provider = llm_provider
+    application.state.reranker = reranker
     application.state.vector_store = vector_store
     application.add_middleware(RequestContextMiddleware)
     register_error_handlers(application)

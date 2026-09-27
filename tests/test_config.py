@@ -20,3 +20,8 @@ def test_settings_load_environment_values(monkeypatch: pytest.MonkeyPatch) -> No
 def test_settings_reject_invalid_port() -> None:
     with pytest.raises(ValidationError):
         Settings(app_port=70000)
+
+
+def test_settings_reject_final_top_k_above_rerank_pool() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rerank_candidate_limit=3, rerank_final_top_k=4)

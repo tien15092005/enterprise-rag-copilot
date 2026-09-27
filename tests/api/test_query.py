@@ -150,6 +150,26 @@ async def test_query_accepts_retrieval_only_mode(app: FastAPI, client: AsyncClie
 
 
 @pytest.mark.asyncio
+async def test_query_accepts_hybrid_rerank_mode(app: FastAPI, client: AsyncClient) -> None:
+    service = FakeRagService()
+    app.dependency_overrides[get_rag_service] = lambda: service
+    response = await client.post(
+        "/api/query",
+        json={
+            "question": "What changed?",
+            "retrieval_mode": "hybrid_rerank",
+            "retrieval_only": True,
+            "debug": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.last_request is not None
+    assert service.last_request.retrieval_mode is RetrievalMode.HYBRID_RERANK
+    assert service.last_request.retrieval_only is True
+
+
+@pytest.mark.asyncio
 async def test_query_dense_mode_remains_default(app: FastAPI, client: AsyncClient) -> None:
     service = FakeRagService()
     app.dependency_overrides[get_rag_service] = lambda: service

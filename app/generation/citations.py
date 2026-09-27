@@ -11,6 +11,7 @@ from app.generation.errors import CitationValidationError
 from app.models.query import Citation
 from app.models.retrieval import (
     HybridRetrievalCandidate,
+    RerankedRetrievalCandidate,
     RetrievalCandidate,
 )
 from app.models.versioning import DocumentLanguage
@@ -56,6 +57,9 @@ class CitationRecord:
     lexical_rank: int | None
     lexical_score: float | None
     rrf_score: float | None
+    rrf_rank: int | None
+    reranker_score: float | None
+    reranker_rank: int | None
     language: DocumentLanguage
     effective_from: datetime | None
     effective_to: datetime | None
@@ -78,6 +82,9 @@ class CitationRecord:
             lexical_rank=self.lexical_rank,
             lexical_score=self.lexical_score,
             rrf_score=self.rrf_score,
+            rrf_rank=self.rrf_rank,
+            reranker_score=self.reranker_score,
+            reranker_rank=self.reranker_rank,
             language=self.language,
             effective_from=self.effective_from,
             effective_to=self.effective_to,
@@ -117,12 +124,27 @@ class CitationFactory:
         ):
             raise CitationScopeError(source.candidate.document_version_id)
         if isinstance(source.candidate, HybridRetrievalCandidate):
-            retrieval_score = source.candidate.rrf_score
+            retrieval_score = (
+                source.candidate.reranker_score
+                if isinstance(source.candidate, RerankedRetrievalCandidate)
+                else source.candidate.rrf_score
+            )
             dense_rank = source.candidate.dense_rank
             dense_score = source.candidate.dense_score
             lexical_rank = source.candidate.lexical_rank
             lexical_score = source.candidate.lexical_score
             rrf_score = source.candidate.rrf_score
+            rrf_rank = source.candidate.rrf_rank
+            reranker_score = (
+                source.candidate.reranker_score
+                if isinstance(source.candidate, RerankedRetrievalCandidate)
+                else None
+            )
+            reranker_rank = (
+                source.candidate.reranker_rank
+                if isinstance(source.candidate, RerankedRetrievalCandidate)
+                else None
+            )
         else:
             retrieval_score = source.candidate.score
             dense_rank = rank
@@ -130,6 +152,9 @@ class CitationFactory:
             lexical_rank = None
             lexical_score = None
             rrf_score = None
+            rrf_rank = None
+            reranker_score = None
+            reranker_rank = None
         return CitationRecord(
             citation_key=citation_key_for_rank(rank),
             logical_document_id=source.candidate.logical_document_id,
@@ -147,6 +172,9 @@ class CitationFactory:
             lexical_rank=lexical_rank,
             lexical_score=lexical_score,
             rrf_score=rrf_score,
+            rrf_rank=rrf_rank,
+            reranker_score=reranker_score,
+            reranker_rank=reranker_rank,
             language=source.candidate.language,
             effective_from=source.effective_from,
             effective_to=source.effective_to,

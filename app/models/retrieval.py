@@ -11,6 +11,7 @@ from app.models.versioning import DocumentLanguage, VectorIndexStatus
 class RetrievalMode(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
+    HYBRID_RERANK = "hybrid_rerank"
 
 
 class VectorIndexResponse(BaseModel):
@@ -69,6 +70,12 @@ class HybridRetrievalCandidate(BaseModel):
     lexical_rank: int | None = None
     lexical_score: float | None = None
     rrf_score: float
+    rrf_rank: int | None = None
+
+
+class RerankedRetrievalCandidate(HybridRetrievalCandidate):
+    reranker_score: float
+    reranker_rank: int = Field(ge=1)
 
 
 class DenseRetrievalResponse(BaseModel):
@@ -128,5 +135,23 @@ class HybridRetrievalBatch(BaseModel):
     merged_duplicate_count: int
 
 
-RetrievalCandidate = DenseRetrievalCandidate | HybridRetrievalCandidate
-RetrievalBatch = DenseRetrievalBatch | HybridRetrievalBatch
+class RerankedRetrievalBatch(BaseModel):
+    document_version_ids: list[UUID]
+    candidates: list[RerankedRetrievalCandidate]
+    embedding_latency_ms: float
+    dense_latency_ms: float
+    lexical_latency_ms: float
+    fusion_latency_ms: float
+    reranking_latency_ms: float
+    total_latency_ms: float
+    dense_candidate_count: int
+    lexical_candidate_count: int
+    merged_duplicate_count: int
+    pre_rerank_candidate_count: int
+    post_rerank_candidate_count: int
+    reranker_model: str
+    reranker_revision: str | None
+
+
+RetrievalCandidate = DenseRetrievalCandidate | HybridRetrievalCandidate | RerankedRetrievalCandidate
+RetrievalBatch = DenseRetrievalBatch | HybridRetrievalBatch | RerankedRetrievalBatch

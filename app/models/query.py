@@ -68,6 +68,9 @@ class Citation(BaseModel):
     lexical_rank: int | None = None
     lexical_score: float | None = None
     rrf_score: float | None = None
+    rrf_rank: int | None = None
+    reranker_score: float | None = None
+    reranker_rank: int | None = None
     language: DocumentLanguage
     effective_from: datetime | None
     effective_to: datetime | None
@@ -85,6 +88,7 @@ class QueryTiming(BaseModel):
     retrieval_ms: float
     lexical_retrieval_ms: float = 0
     fusion_ms: float = 0
+    reranking_ms: float = 0
     context_construction_ms: float
     generation_ms: float
     total_ms: float
