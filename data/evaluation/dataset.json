@@ -1,0 +1,72 @@
+{
+  "dataset_id": "enterprise-rag-bilingual-v1",
+  "revision": "1.0.0",
+  "description": "Repository-owned English/Vietnamese retrieval evaluation corpus.",
+  "chunking": {"chunk_size": 24, "chunk_overlap": 0},
+  "documents": [
+    {
+      "stable_id": "employee-handbook-en",
+      "title": "Employee Handbook",
+      "language": "en",
+      "versions": [
+        {"label": "2025", "ordinal": 1, "path": "corpus/employee_handbook_en_2025.md", "effective_from": "2025-01-01T00:00:00Z", "effective_to": "2026-01-01T00:00:00Z", "active": false},
+        {"label": "2026", "ordinal": 2, "path": "corpus/employee_handbook_en_2026.md", "effective_from": "2026-01-01T00:00:00Z", "effective_to": null, "active": true}
+      ]
+    },
+    {
+      "stable_id": "security-standard-en",
+      "title": "Information Security Standard",
+      "language": "en",
+      "versions": [
+        {"label": "2026", "ordinal": 1, "path": "corpus/security_standard_en.md", "effective_from": "2026-01-01T00:00:00Z", "effective_to": null, "active": true}
+      ]
+    },
+    {
+      "stable_id": "leave-policy-vi",
+      "title": "Chính sách nghỉ phép",
+      "language": "vi",
+      "versions": [
+        {"label": "2025", "ordinal": 1, "path": "corpus/leave_policy_vi_2025.md", "effective_from": "2025-01-01T00:00:00Z", "effective_to": "2026-01-01T00:00:00Z", "active": false},
+        {"label": "2026", "ordinal": 2, "path": "corpus/leave_policy_vi_2026.md", "effective_from": "2026-01-01T00:00:00Z", "effective_to": null, "active": true}
+      ]
+    },
+    {
+      "stable_id": "security-guide-vi",
+      "title": "Hướng dẫn an toàn thông tin",
+      "language": "vi",
+      "versions": [
+        {"label": "2026", "ordinal": 1, "path": "corpus/security_guide_vi.md", "effective_from": "2026-01-01T00:00:00Z", "effective_to": null, "active": true}
+      ]
+    }
+  ],
+  "evidence": [
+    {"id": "en-remote-2025", "document": "employee-handbook-en", "version": "2025", "text_contains": "remotely up to one day per week"},
+    {"id": "en-remote-2026", "document": "employee-handbook-en", "version": "2026", "text_contains": "remotely up to two days per week"},
+    {"id": "en-leave-2025", "document": "employee-handbook-en", "version": "2025", "text_contains": "ten days of paid annual leave"},
+    {"id": "en-leave-2026", "document": "employee-handbook-en", "version": "2026", "text_contains": "twelve days of paid annual leave"},
+    {"id": "en-phishing", "document": "security-standard-en", "version": "2026", "text_contains": "phishing must be reported"},
+    {"id": "en-security-code", "document": "security-standard-en", "version": "2026", "text_contains": "SEC-ALPHA-77"},
+    {"id": "vi-leave-2025", "document": "leave-policy-vi", "version": "2025", "text_contains": "mười ngày nghỉ phép có lương"},
+    {"id": "vi-leave-2026", "document": "leave-policy-vi", "version": "2026", "text_contains": "mười hai ngày nghỉ phép có lương"},
+    {"id": "vi-code-2025", "document": "leave-policy-vi", "version": "2025", "text_contains": "VN-LEAVE-2025"},
+    {"id": "vi-code-2026", "document": "leave-policy-vi", "version": "2026", "text_contains": "VN-LEAVE-2026"},
+    {"id": "vi-incident", "document": "security-guide-vi", "version": "2026", "text_contains": "trong vòng mười lăm phút"},
+    {"id": "vi-security-code", "document": "security-guide-vi", "version": "2026", "text_contains": "SEC-VN-42"}
+  ],
+  "cases": [
+    {"id": "en-exact-remote-2025", "query": "How many remote days were allowed?", "language": "en", "document": "employee-handbook-en", "selector": {"kind": "exact", "version": "2025"}, "relevant": ["en-remote-2025"], "expected_answer": "One day per week.", "tags": ["exact", "semantic_paraphrase"]},
+    {"id": "en-current-remote", "query": "What is the current work-from-home allowance?", "language": "en", "document": "employee-handbook-en", "selector": {"kind": "current"}, "relevant": ["en-remote-2026"], "expected_answer": "Two days per week.", "tags": ["current", "semantic_paraphrase"]},
+    {"id": "en-asof-leave", "query": "How much paid annual leave was provided?", "language": "en", "document": "employee-handbook-en", "selector": {"kind": "as_of", "as_of": "2025-06-01T00:00:00Z"}, "relevant": ["en-leave-2025"], "expected_answer": "Ten days.", "tags": ["as_of", "semantic_paraphrase"]},
+    {"id": "en-all-remote", "query": "remote work days per week", "language": "en", "document": "employee-handbook-en", "selector": {"kind": "all"}, "relevant": ["en-remote-2025", "en-remote-2026"], "expected_answer": null, "tags": ["all", "lexical"]},
+    {"id": "en-lexical-code", "query": "SEC-ALPHA-77", "language": "en", "document": "security-standard-en", "selector": {"kind": "current"}, "relevant": ["en-security-code"], "expected_answer": "SEC-ALPHA-77.", "tags": ["current", "exact_token"]},
+    {"id": "en-semantic-incident", "query": "How quickly must a suspected scam email be escalated?", "language": "en", "document": "security-standard-en", "selector": {"kind": "current"}, "relevant": ["en-phishing"], "expected_answer": "Within thirty minutes.", "tags": ["current", "semantic_paraphrase"]},
+    {"id": "en-insufficient", "query": "What is tomorrow's cafeteria menu?", "language": "en", "document": "employee-handbook-en", "selector": {"kind": "current"}, "relevant": [], "expected_answer": null, "tags": ["current", "insufficient_evidence"]},
+    {"id": "vi-exact-leave-2025", "query": "Nhân viên được nghỉ phép bao nhiêu ngày?", "language": "vi", "document": "leave-policy-vi", "selector": {"kind": "exact", "version": "2025"}, "relevant": ["vi-leave-2025"], "expected_answer": "Mười ngày.", "tags": ["exact", "semantic_paraphrase"]},
+    {"id": "vi-current-leave", "query": "Quyền lợi nghỉ hằng năm hiện tại là bao nhiêu?", "language": "vi", "document": "leave-policy-vi", "selector": {"kind": "current"}, "relevant": ["vi-leave-2026"], "expected_answer": "Mười hai ngày.", "tags": ["current", "semantic_paraphrase"]},
+    {"id": "vi-asof-code", "query": "Mã chính sách nghỉ phép là gì?", "language": "vi", "document": "leave-policy-vi", "selector": {"kind": "as_of", "as_of": "2025-06-01T00:00:00Z"}, "relevant": ["vi-code-2025"], "expected_answer": "VN-LEAVE-2025.", "tags": ["as_of", "lexical"]},
+    {"id": "vi-all-codes", "query": "mã chính sách VN-LEAVE", "language": "vi", "document": "leave-policy-vi", "selector": {"kind": "all"}, "relevant": ["vi-code-2025", "vi-code-2026"], "expected_answer": null, "tags": ["all", "exact_token"]},
+    {"id": "vi-lexical-code", "query": "SEC-VN-42", "language": "vi", "document": "security-guide-vi", "selector": {"kind": "current"}, "relevant": ["vi-security-code"], "expected_answer": "SEC-VN-42.", "tags": ["current", "exact_token"]},
+    {"id": "vi-semantic-incident", "query": "Khi làm mất máy tính thì phải thông báo trong thời gian nào?", "language": "vi", "document": "security-guide-vi", "selector": {"kind": "current"}, "relevant": ["vi-incident"], "expected_answer": "Trong vòng mười lăm phút.", "tags": ["current", "semantic_paraphrase"]},
+    {"id": "vi-insufficient", "query": "Mức trợ cấp ăn trưa là bao nhiêu?", "language": "vi", "document": "leave-policy-vi", "selector": {"kind": "current"}, "relevant": [], "expected_answer": null, "tags": ["current", "insufficient_evidence"]}
+  ]
+}

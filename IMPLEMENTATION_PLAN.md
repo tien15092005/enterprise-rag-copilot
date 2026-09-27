@@ -279,6 +279,11 @@ python -m mypy app
 
 ## Phase 8 - Evaluation
 
+Status: implemented. A repository-owned bilingual, multi-version dataset, deterministic retrieval
+metrics, version-leakage accounting, bounded configuration comparison, JSON/CSV persistence,
+reproducible CLI, and generated human-readable report compare dense, hybrid, and hybrid-reranked
+outcomes. Generation judge scoring remains deliberately unexecuted without a configured judge.
+
 ### Objective
 
 Create a small licensed/repository-owned bilingual, multi-version evaluation corpus; version-scoped annotations; deterministic retrieval metrics; citation checks; optional judge-based generation metrics; experiment persistence; JSON/CSV export; and evaluation API endpoints. Add comparison fixtures and metrics only for the later comparison subphase; do not fabricate comparison scores before then.

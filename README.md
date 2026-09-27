@@ -6,8 +6,8 @@ versions of the same logical document.
 
 ## Current status
 
-Phase 6 implements bilingual, version-aware hybrid retrieval on top of the evidence-grounded RAG
-baseline:
+Phase 8 implements reproducible bilingual evaluation on top of the version-aware, reranked RAG
+pipeline:
 
 - Immutable document-version records grouped under stable logical documents.
 - Local filesystem source storage behind a replaceable storage protocol.
@@ -24,6 +24,8 @@ baseline:
 - Dense retrieval scoped to exactly one caller-supplied document version.
 - PostgreSQL full-text lexical retrieval using `english` for English and `simple` for Vietnamese.
 - Explicit Reciprocal Rank Fusion (RRF) with per-branch rank and score provenance.
+- Lazy pinned multilingual cross-encoder reranking over a bounded post-RRF candidate pool.
+- `dense`, `hybrid`, and `hybrid_rerank` query modes with dense kept as the default.
 - Dense and lexical branches filtered by the same resolved immutable version IDs.
 - PostgreSQL provenance validation for every Qdrant search result.
 - Explicit exact, current, all-version, and as-of scope resolution.
@@ -31,9 +33,11 @@ baseline:
 - Replaceable OpenAI-compatible and optional Ollama generation providers.
 - English/Vietnamese answer-language behavior and deterministic no-evidence refusal.
 - Structured citations resolved only from evidence actually supplied to the LLM.
+- Repository-owned English/Vietnamese, multi-document, multi-version evaluation fixtures.
+- HitRate@K, Recall@K, binary nDCG@K, MRR, version leakage, and latency reporting.
+- Reproducible JSON/CSV experiment artifacts and a generated Markdown report.
 
-Reranking, version comparison, agents, and final evaluation benchmarking are intentionally not
-implemented yet.
+Version comparison, agents, and production hardening are intentionally not implemented yet.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
@@ -322,6 +326,33 @@ for ORM writes.
 docker compose config
 ```
 
+## Reproducible evaluation
+
+Phase 8 adds the repository-owned dataset at `data/evaluation/dataset.json` and bilingual source
+documents under `data/evaluation/corpus/`. It contains 14 cases across four logical documents and
+six immutable versions, covering exact, current, `as_of`, and all-version scopes; semantic
+paraphrases; exact tokens; and insufficient-evidence queries. Stable evidence labels are resolved
+to the actual ingested chunk UUIDs during each run.
+
+Run the live comparison with healthy PostgreSQL and Qdrant services:
+
+```powershell
+.venv\Scripts\python scripts\run_evaluation.py
+```
+
+The CLI compares `dense`, `hybrid`, and `hybrid_rerank` at K=1, 3, and 5 for candidate limits 5
+and 20. It reports HitRate@K, Recall@K, binary nDCG@K, MRR, wrong-version results, leakage rate,
+scope violations, and component latency. First-request/cold probes are kept separate from warm
+mean, p50, and p95 statistics. English, Vietnamese, and combined aggregates are never collapsed
+into only one overall result.
+
+Machine-readable JSON/CSV artifacts are written beneath `data/evaluation/results/` on the project
+drive and intentionally ignored by Git. The latest executed results are summarized in
+`EVALUATION_REPORT.md`. The current small dataset measured identical combined MRR for all three
+modes, with opposite English/Vietnamese reranker effects, so dense remains the compatibility
+default. These measurements are engineering evidence for this dataset, not a general benchmark
+claim.
+
 No API keys belong in the repository. Copy `.env.example` to `.env` and provide secrets locally.
 
 ## Known limitations
@@ -337,14 +368,15 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
   available for diagnosis.
 - PostgreSQL `simple` search is only a transparent Vietnamese lexical baseline; it has no
   Vietnamese stemmer and may miss differently segmented or inflected terms.
-- Hybrid candidate limits and `RRF_K` have not been tuned by the later evaluation phase.
-- Reranker candidate/final limits, latency, and English/Vietnamese quality have not been
-  benchmark-tuned; no measured improvement over hybrid retrieval is claimed yet.
+- Candidate limits 5 and 20 produced identical quality metrics on the Phase 8 dataset; broader
+  tuning of candidate limits and `RRF_K` has not been performed.
+- Reranking produced no combined MRR gain on the Phase 8 dataset and shifted English/Vietnamese
+  MRR in opposite directions; no general quality improvement is claimed.
 - Qdrant and PostgreSQL do not share a transaction. Explicit failed state and idempotent point IDs
   make retries safe, while reconciliation tooling remains future work.
-- Dense retrieval quality has only been smoke-tested with the included English and Vietnamese
-  samples; no benchmark or evaluation score is claimed.
+- Retrieval quality has been measured only on the small repository-owned Phase 8 engineering
+  dataset, not an external or statistically representative benchmark.
 - Citation-key validation proves that a key maps to supplied evidence, not that every natural-
   language claim is semantically entailed by that evidence. Automatic claim/evidence verification
   is deferred.
-- Version comparison, agents, and final evaluation benchmarking are not implemented.
+- Version comparison, agents, and production hardening are not implemented.

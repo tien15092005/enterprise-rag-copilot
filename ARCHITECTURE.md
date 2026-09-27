@@ -261,11 +261,28 @@ automatic claim/evidence verification remains future evaluation work.
 
 ### Evaluation
 
-The repository contains a small, versioned bilingual corpus and JSONL question set. It includes English and Vietnamese questions, multiple versions of at least one logical document, exact-version questions, current-version questions, and version-difference questions. Each record includes a stable question ID, language, version scope, relevant logical-document/version/chunk identifiers, and reference answer or change annotations when available.
+The repository contains a small, versioned bilingual corpus and a validated JSON dataset. It
+includes English and Vietnamese questions, multiple logical documents and versions, exact/current/
+`as_of`/all selectors, semantic paraphrases, exact-token lookups, and insufficient-evidence cases.
+Each case uses stable evidence IDs that the runner resolves to actual chunk UUIDs after ingestion.
 
 Retrieval evaluation computes Recall@K, Hit Rate@K, and MRR from labeled relevance data. Generation evaluation computes citation accuracy using deterministic citation/reference checks. Groundedness/faithfulness and answer relevance can use a configured judge provider; when no judge is configured, their status is recorded as `not_executed` with a reason, never as a fabricated score.
 
-Each run records dataset version/hash, timestamp, Git commit when available, provider/model identities, chunking and retrieval configuration, per-example outputs, aggregate metrics, latency summaries, and errors. Results are stored in PostgreSQL for API access and exported to versionable JSON/CSV artifacts under a configurable results directory.
+Each run records dataset version/hash, timestamp, Git commit when available, provider/model
+identities, chunking and retrieval configuration, per-example outputs, aggregate metrics, latency
+summaries, and errors. Results are exported to ignored JSON/CSV runtime artifacts under the
+configurable D:-backed project results directory. The generated Markdown report is reviewable and
+versionable. Phase 8 intentionally does not add an evaluation API or database persistence because
+the reproducible CLI and files satisfy the current measurement workflow without expanding the
+production surface.
+
+Retrieval metrics operate on final candidate identities rather than incomparable dense, lexical,
+RRF, or reranker score scales. Binary HitRate@K, Recall@K, nDCG@K, and MRR are reported separately
+for English, Vietnamese, and combined cases. Insufficient-evidence cases are excluded from
+relevance averages and receive a separate empty-result rate. Every returned candidate is checked
+against the resolver's explicit version IDs; wrong-version counts and exact/current/`as_of`
+violations are reported as failures. Cold/first-request probes are separate from warm mean, p50,
+and nearest-rank p95 latency summaries.
 
 ### Controlled agent layer
 
