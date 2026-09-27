@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -20,7 +21,10 @@ from app.ingestion.service import DocumentCatalogService, IngestionService
 from app.ingestion.storage import LocalFilesystemStorage
 from app.models.documents import DocumentVersionCreate, LogicalDocumentCreate
 from app.models.query import QueryRequest, QueryVersionSelector
+from app.models.retrieval import RetrievalMode
 from app.models.versioning import DocumentLanguage, VersionSelectorKind
+from app.retrieval.hybrid import HybridRetrievalService, ModeAwareRetrievalService
+from app.retrieval.lexical import LexicalRetrievalService
 from app.retrieval.service import DenseRetrievalService, VectorIndexingService
 from app.retrieval.version_scope import VersionScopeResolver
 from app.vector_store import QdrantVectorStore
@@ -34,6 +38,8 @@ class ControlledBilingualLLM:
     async def generate(self, request: LLMRequest) -> LLMResponse:
         if "Requested answer language: Vietnamese" in request.user_prompt:
             text = "Nhân viên được hưởng mười hai ngày nghỉ phép có lương mỗi năm [S1]."
+        elif "up to one day per week" in request.user_prompt:
+            text = "Employees may work remotely up to one day per week [S1]."
         else:
             text = "Employees may work remotely up to two days per week [S1]."
         return LLMResponse(text, LLMTokenUsage(120, 18, 138))
@@ -143,13 +149,42 @@ async def run() -> None:
             await indexer.index_version(english_version_id)
             await indexer.index_version(vietnamese_version_id)
 
+            legacy_bytes = await asyncio.to_thread(
+                Path("data/samples/employee_handbook_en_2025.md").read_bytes
+            )
+            legacy = await ingestion.ingest(
+                english_document_id,
+                DocumentVersionCreate(
+                    version_label="2025",
+                    version_ordinal=2,
+                    language=DocumentLanguage.ENGLISH,
+                    activate=False,
+                    chunk_size=35,
+                    chunk_overlap=5,
+                ),
+                source=BytesIO(legacy_bytes),
+                filename="employee_handbook_en_2025.md",
+            )
+            legacy_version_id = legacy.document_version_id
+            await indexer.index_version(legacy_version_id)
+
             llm = ControlledBilingualLLM()
             context_builder = EvidenceContextBuilder(settings.rag_max_context_characters)
             resolver = VersionScopeResolver(session)
+            dense = DenseRetrievalService(session, embeddings, vector_store)
+            lexical = LexicalRetrievalService(session)
+            hybrid = HybridRetrievalService(
+                dense,
+                lexical,
+                dense_candidate_limit=settings.dense_candidate_limit,
+                lexical_candidate_limit=settings.lexical_candidate_limit,
+                rrf_k=settings.rrf_k,
+            )
+            retrieval = ModeAwareRetrievalService(dense, hybrid)
             rag = RagAnswerService(
                 session,
                 resolver,
-                DenseRetrievalService(session, embeddings, vector_store),
+                retrieval,
                 context_builder,
                 llm,
                 settings,
@@ -158,6 +193,7 @@ async def run() -> None:
                 QueryRequest(
                     question="How many days per week may employees work remotely?",
                     logical_document_id=english_document_id,
+                    retrieval_mode=RetrievalMode.HYBRID,
                     debug=True,
                 )
             )
@@ -165,6 +201,7 @@ async def run() -> None:
                 QueryRequest(
                     question="Nhân viên được nghỉ phép có lương bao nhiêu ngày mỗi năm?",
                     logical_document_id=vietnamese_document_id,
+                    retrieval_mode=RetrievalMode.HYBRID,
                     debug=True,
                 )
             )
@@ -173,15 +210,53 @@ async def run() -> None:
                     question="How many days per week may employees work remotely?",
                     version_selector=QueryVersionSelector(
                         kind=VersionSelectorKind.EXACT,
-                        document_version_id=english_version_id,
+                        document_version_id=legacy_version_id,
                     ),
+                    retrieval_mode=RetrievalMode.HYBRID,
                     debug=True,
                 )
+            )
+            assert all(
+                citation.document_version_id == legacy_version_id for citation in exact.citations
+            )
+            retrieval_outputs = {
+                "english": {
+                    "dense": (await dense.search("remote work", english_version_id, 5)).model_dump(
+                        mode="json"
+                    ),
+                    "lexical": (
+                        await lexical.search("remote work", english_version_id, 5)
+                    ).model_dump(mode="json"),
+                    "hybrid": (
+                        await hybrid.search("remote work", english_version_id, 5)
+                    ).model_dump(mode="json"),
+                },
+                "vietnamese": {
+                    "dense": (await dense.search("nghỉ phép", vietnamese_version_id, 5)).model_dump(
+                        mode="json"
+                    ),
+                    "lexical": (
+                        await lexical.search("nghỉ phép", vietnamese_version_id, 5)
+                    ).model_dump(mode="json"),
+                    "hybrid": (
+                        await hybrid.search("nghỉ phép", vietnamese_version_id, 5)
+                    ).model_dump(mode="json"),
+                },
+            }
+            empty_dense = DenseRetrievalService(
+                session, embeddings, EmptySearchVectorStore(vector_store)
+            )
+            empty_hybrid = HybridRetrievalService(
+                empty_dense,
+                lexical,
+                dense_candidate_limit=settings.dense_candidate_limit,
+                lexical_candidate_limit=settings.lexical_candidate_limit,
+                rrf_k=settings.rrf_k,
             )
             insufficient_rag = RagAnswerService(
                 session,
                 resolver,
-                DenseRetrievalService(session, embeddings, EmptySearchVectorStore(vector_store)),
+                ModeAwareRetrievalService(empty_dense, empty_hybrid),
                 context_builder,
                 llm,
                 settings,
@@ -196,7 +271,7 @@ async def run() -> None:
             retrieval_only_rag = RagAnswerService(
                 session,
                 resolver,
-                DenseRetrievalService(session, embeddings, vector_store),
+                retrieval,
                 context_builder,
                 None,
                 settings,
@@ -205,6 +280,7 @@ async def run() -> None:
                 QueryRequest(
                     question="What is the remote-work policy?",
                     logical_document_id=english_document_id,
+                    retrieval_mode=RetrievalMode.HYBRID,
                     retrieval_only=True,
                     debug=True,
                 )
@@ -232,6 +308,7 @@ async def run() -> None:
             output = {
                 "cache": await asyncio.to_thread(cache_details, settings.embedding_cache_directory),
                 "providers": provider_configuration,
+                "retrieval": retrieval_outputs,
                 "english": english.model_dump(mode="json"),
                 "vietnamese": vietnamese.model_dump(mode="json"),
                 "exact": exact.model_dump(mode="json"),

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.models.retrieval import RetrievalMode
 from app.models.versioning import DocumentLanguage, VersionSelectorKind
 
 
@@ -32,6 +33,7 @@ class QueryRequest(BaseModel):
     logical_document_id: UUID | None = None
     version_selector: QueryVersionSelector = Field(default_factory=QueryVersionSelector)
     top_k: int = Field(default=5, ge=1, le=100)
+    retrieval_mode: RetrievalMode = RetrievalMode.DENSE
     retrieval_only: bool = False
     debug: bool = False
 
@@ -61,6 +63,11 @@ class Citation(BaseModel):
     excerpt: str
     rank: int = Field(ge=1)
     retrieval_score: float
+    dense_rank: int | None = None
+    dense_score: float | None = None
+    lexical_rank: int | None = None
+    lexical_score: float | None = None
+    rrf_score: float | None = None
     language: DocumentLanguage
     effective_from: datetime | None
     effective_to: datetime | None
@@ -76,6 +83,8 @@ class QueryTiming(BaseModel):
     scope_resolution_ms: float
     query_embedding_ms: float
     retrieval_ms: float
+    lexical_retrieval_ms: float = 0
+    fusion_ms: float = 0
     context_construction_ms: float
     generation_ms: float
     total_ms: float

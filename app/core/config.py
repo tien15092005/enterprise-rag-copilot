@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=700, ge=1)
     rag_max_context_characters: int = Field(default=12000, ge=500)
     citation_excerpt_max_characters: int = Field(default=500, ge=1)
+    dense_candidate_limit: int = Field(default=20, ge=1, le=100)
+    lexical_candidate_limit: int = Field(default=20, ge=1, le=100)
+    rrf_k: int = Field(default=60, ge=1, le=1000)
 
 
 @lru_cache

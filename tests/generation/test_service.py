@@ -15,7 +15,13 @@ from app.generation.errors import CitationValidationError, LLMConfigurationError
 from app.generation.providers.base import LLMRequest, LLMResponse, LLMTokenUsage
 from app.generation.service import RagAnswerService
 from app.models.query import QueryRequest, QueryVersionSelector
-from app.models.retrieval import DenseRetrievalBatch, DenseRetrievalCandidate
+from app.models.retrieval import (
+    DenseRetrievalBatch,
+    DenseRetrievalCandidate,
+    HybridRetrievalBatch,
+    HybridRetrievalCandidate,
+    RetrievalMode,
+)
 from app.models.versioning import (
     DocumentLanguage,
     VectorIndexStatus,
@@ -30,11 +36,17 @@ class FakeRetrieval:
     def __init__(self, candidates: list[DenseRetrievalCandidate]) -> None:
         self.candidates = candidates
         self.requested_version_ids: list[object] = []
+        self.requested_mode: RetrievalMode | None = None
 
     async def search_versions(
-        self, _query: str, document_version_ids: list[object], _top_k: int
+        self,
+        _query: str,
+        document_version_ids: list[object],
+        _top_k: int,
+        _mode: RetrievalMode,
     ) -> DenseRetrievalBatch:
         self.requested_version_ids = document_version_ids
+        self.requested_mode = _mode
         candidates = [
             candidate
             for candidate in self.candidates
@@ -52,7 +64,11 @@ class FakeRetrieval:
 
 class LeakyRetrieval(FakeRetrieval):
     async def search_versions(
-        self, _query: str, document_version_ids: list[object], _top_k: int
+        self,
+        _query: str,
+        document_version_ids: list[object],
+        _top_k: int,
+        _mode: RetrievalMode,
     ) -> DenseRetrievalBatch:
         self.requested_version_ids = document_version_ids
         return DenseRetrievalBatch(
@@ -62,6 +78,33 @@ class LeakyRetrieval(FakeRetrieval):
             embedding_latency_ms=1.5,
             retrieval_latency_ms=2.5,
             total_latency_ms=4,
+        )
+
+
+class FakeHybridRetrieval:
+    def __init__(self, candidate: HybridRetrievalCandidate) -> None:
+        self.candidate = candidate
+        self.requested_mode: RetrievalMode | None = None
+
+    async def search_versions(
+        self,
+        _query: str,
+        document_version_ids: list[object],
+        _top_k: int,
+        mode: RetrievalMode,
+    ) -> HybridRetrievalBatch:
+        self.requested_mode = mode
+        return HybridRetrievalBatch(
+            document_version_ids=document_version_ids,
+            candidates=[self.candidate],
+            embedding_latency_ms=1,
+            dense_latency_ms=2,
+            lexical_latency_ms=3,
+            fusion_latency_ms=0.5,
+            total_latency_ms=6.5,
+            dense_candidate_count=1,
+            lexical_candidate_count=1,
+            merged_duplicate_count=1,
         )
 
 
@@ -276,6 +319,51 @@ async def test_retrieval_only_succeeds_without_llm(app: Any, settings: Settings)
 
 
 @pytest.mark.asyncio
+async def test_retrieval_only_hybrid_preserves_fusion_debug(app: Any, settings: Settings) -> None:
+    database: Database = app.state.database
+    logical_document_id, version = await ready_scope(database)
+    base = make_candidate(version, "Known hybrid evidence")
+    retrieval = FakeHybridRetrieval(
+        HybridRetrievalCandidate(
+            chunk_id=base.chunk_id,
+            document_version_id=base.document_version_id,
+            logical_document_id=base.logical_document_id,
+            text=base.text,
+            ordinal=base.ordinal,
+            page=base.page,
+            section_path=base.section_path,
+            language=base.language,
+            dense_rank=2,
+            dense_score=0.8,
+            lexical_rank=1,
+            lexical_score=0.5,
+            rrf_score=0.0325,
+        )
+    )
+    service, session = await build_service(database, retrieval, None, settings)  # type: ignore[arg-type]
+    try:
+        result = await service.answer(
+            QueryRequest(
+                question="What does the policy say?",
+                logical_document_id=logical_document_id,
+                retrieval_mode=RetrievalMode.HYBRID,
+                retrieval_only=True,
+                debug=True,
+            )
+        )
+    finally:
+        await session.close()
+
+    assert result.answer is None
+    assert retrieval.requested_mode is RetrievalMode.HYBRID
+    assert result.citations[0].dense_rank == 2
+    assert result.citations[0].lexical_rank == 1
+    assert result.citations[0].rrf_score == 0.0325
+    assert result.timing.lexical_retrieval_ms == 3
+    assert result.timing.fusion_ms == 0.5
+
+
+@pytest.mark.asyncio
 async def test_generation_without_llm_reports_configuration_error(
     app: Any, settings: Settings
 ) -> None:
@@ -344,6 +432,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                 question="Question",
                 logical_document_id=logical_document_id,
                 version_selector=QueryVersionSelector(kind=VersionSelectorKind.ALL),
+                retrieval_mode=RetrievalMode.HYBRID,
             )
         )
         assert [citation.document_version_id for citation in all_result.citations] == [
@@ -359,12 +448,17 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                 version_selector=QueryVersionSelector(
                     kind=VersionSelectorKind.EXACT, document_version_id=v1.document_version_id
                 ),
+                retrieval_mode=RetrievalMode.HYBRID,
             )
         )
         assert exact_result.citations[0].document_version_id == v1.document_version_id
 
         current_result = await service.answer(
-            QueryRequest(question="Question", logical_document_id=logical_document_id)
+            QueryRequest(
+                question="Question",
+                logical_document_id=logical_document_id,
+                retrieval_mode=RetrievalMode.HYBRID,
+            )
         )
         assert current_result.citations[0].document_version_id == v2.document_version_id
 
@@ -376,6 +470,7 @@ async def test_citations_preserve_exact_current_all_and_as_of_provenance(
                     kind=VersionSelectorKind.AS_OF,
                     as_of=datetime(2025, 6, 1, tzinfo=UTC),
                 ),
+                retrieval_mode=RetrievalMode.HYBRID,
             )
         )
         assert as_of_result.citations[0].document_version_id == v1.document_version_id

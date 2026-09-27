@@ -192,11 +192,22 @@ Retrieval remains explicit and staged:
 5. Optional reranker scores the fused candidates and returns the configured `rerank_top_n`.
 6. Context builder enforces a context budget and formats stable citation identifiers that include version provenance.
 
-Phase A implements step 1. Phase B adds steps 2 and 3. Phase C adds step 4. Query settings include `top_k`, retrieval mode, RRF parameters, and `rerank_top_n`, with server-side bounds to prevent excessive workloads.
+Phase 6 implements steps 1 through 4. `/api/query` exposes `dense` and `hybrid` retrieval modes;
+`dense` remains the compatibility default until evaluation supports changing it. Query settings
+bound dense and lexical branch candidates and expose the RRF constant. Step 5 remains deferred to
+Phase 7.
 
-PostgreSQL full-text search is the proposed lexical implementation. It avoids operating Elasticsearch/OpenSearch for the portfolio baseline. PostgreSQL's native ranking is not a textbook BM25 implementation, so the code and documentation will call it lexical/full-text retrieval unless a true BM25 extension or in-process BM25 index is later selected.
+PostgreSQL full-text search is the implemented lexical baseline. Expression GIN indexes cover
+English and simple configurations without introducing Elasticsearch/OpenSearch. PostgreSQL's
+native ranking is not textbook BM25, so the system describes it accurately as lexical/full-text
+retrieval.
 
-For English, PostgreSQL's `english` text-search configuration can provide stemming. PostgreSQL has no built-in Vietnamese linguistic stemmer, so Vietnamese initially uses the `simple` configuration with Unicode-preserving normalization. Dense multilingual retrieval carries more of the semantic burden for Vietnamese. Lexical quality, diacritic handling, and mixed-language queries must be covered by bilingual evaluation rather than assumed.
+English chunks use PostgreSQL's `english` configuration and Vietnamese chunks use `simple`.
+PostgreSQL has no built-in Vietnamese linguistic stemmer, so the Vietnamese branch is an exact-token
+baseline with Unicode-preserving behavior, not sophisticated Vietnamese search. Both branches are
+restricted to the version IDs produced by the scope resolver. RRF merges by stable `chunk_id` and
+retains dense rank/score, lexical rank/score, and fused score for debug inspection. The default
+constant is 60 and remains an evaluation parameter.
 
 ### Reranking
 

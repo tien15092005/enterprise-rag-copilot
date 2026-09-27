@@ -20,6 +20,8 @@ def test_phase_three_routes_are_in_openapi(app: FastAPI) -> None:
 
     assert "/api/document-versions/{document_version_id}/index" in schema["paths"]
     assert "/api/retrieval/dense" in schema["paths"]
+    assert "/api/retrieval/lexical" in schema["paths"]
+    assert "/api/retrieval/hybrid" in schema["paths"]
     dense_schema = schema["components"]["schemas"]["DenseRetrievalRequest"]
     assert dense_schema["required"] == ["query", "document_version_id"]
     assert dense_schema["properties"]["top_k"]["minimum"] == 1

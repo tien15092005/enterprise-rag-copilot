@@ -25,9 +25,9 @@ from app.models.query import (
     ResolvedScope,
     TokenUsage,
 )
-from app.models.retrieval import DenseRetrievalBatch, DenseRetrievalCandidate
+from app.models.retrieval import HybridRetrievalBatch, RetrievalBatch, RetrievalCandidate
 from app.models.versioning import DocumentLanguage
-from app.retrieval.service import DenseRetrievalService
+from app.retrieval.hybrid import ModeAwareRetrievalService
 from app.retrieval.version_scope import VersionScopeResolver
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class RagAnswerService:
         self,
         session: AsyncSession,
         scope_resolver: VersionScopeResolver,
-        retrieval: DenseRetrievalService,
+        retrieval: ModeAwareRetrievalService,
         context_builder: EvidenceContextBuilder,
         llm: LLMProvider | None,
         settings: Settings,
@@ -67,9 +67,15 @@ class RagAnswerService:
         version_ids = [version.document_version_id for version in scope.versions]
 
         retrieval_result = await self._retrieval.search_versions(
-            request.question, version_ids, request.top_k
+            request.question,
+            version_ids,
+            request.top_k,
+            request.retrieval_mode,
         )
-        evidence_metadata = await self._hydrate_evidence(retrieval_result.candidates)
+        retrieved_candidates: list[RetrievalCandidate] = [
+            candidate for candidate in retrieval_result.candidates
+        ]
+        evidence_metadata = await self._hydrate_evidence(retrieved_candidates)
         context_started = perf_counter()
         context = self._context_builder.build(
             evidence_metadata,
@@ -144,7 +150,9 @@ class RagAnswerService:
             timing=QueryTiming(
                 scope_resolution_ms=scope_ms,
                 query_embedding_ms=retrieval_result.embedding_latency_ms,
-                retrieval_ms=retrieval_result.retrieval_latency_ms,
+                retrieval_ms=self._retrieval_latency(retrieval_result),
+                lexical_retrieval_ms=self._lexical_latency(retrieval_result),
+                fusion_ms=self._fusion_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=generation_ms,
                 total_ms=total_ms,
@@ -163,9 +171,7 @@ class RagAnswerService:
             debug=(self._debug(context, validation) if request.debug else None),
         )
 
-    async def _hydrate_evidence(
-        self, candidates: list[DenseRetrievalCandidate]
-    ) -> list[CitationSource]:
+    async def _hydrate_evidence(self, candidates: list[RetrievalCandidate]) -> list[CitationSource]:
         version_ids = {candidate.document_version_id for candidate in candidates}
         versions = list(
             await self._session.scalars(
@@ -220,7 +226,7 @@ class RagAnswerService:
         request: QueryRequest,
         language: DocumentLanguage,
         scope: ResolvedScope,
-        retrieval_result: DenseRetrievalBatch,
+        retrieval_result: RetrievalBatch,
         scope_ms: float,
         context_ms: float,
         total_started: float,
@@ -255,7 +261,9 @@ class RagAnswerService:
             timing=QueryTiming(
                 scope_resolution_ms=scope_ms,
                 query_embedding_ms=retrieval_result.embedding_latency_ms,
-                retrieval_ms=retrieval_result.retrieval_latency_ms,
+                retrieval_ms=self._retrieval_latency(retrieval_result),
+                lexical_retrieval_ms=self._lexical_latency(retrieval_result),
+                fusion_ms=self._fusion_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=0,
                 total_ms=total_ms,
@@ -274,7 +282,7 @@ class RagAnswerService:
         request: QueryRequest,
         language: DocumentLanguage,
         scope: ResolvedScope,
-        retrieval_result: DenseRetrievalBatch,
+        retrieval_result: RetrievalBatch,
         context: BuiltContext,
         scope_ms: float,
         context_ms: float,
@@ -302,7 +310,9 @@ class RagAnswerService:
             timing=QueryTiming(
                 scope_resolution_ms=scope_ms,
                 query_embedding_ms=retrieval_result.embedding_latency_ms,
-                retrieval_ms=retrieval_result.retrieval_latency_ms,
+                retrieval_ms=self._retrieval_latency(retrieval_result),
+                lexical_retrieval_ms=self._lexical_latency(retrieval_result),
+                fusion_ms=self._fusion_latency(retrieval_result),
                 context_construction_ms=context_ms,
                 generation_ms=0,
                 total_ms=total_ms,
@@ -312,6 +322,20 @@ class RagAnswerService:
             insufficient_evidence=False,
             debug=(self._not_applicable_debug(context) if request.debug else None),
         )
+
+    @staticmethod
+    def _retrieval_latency(result: RetrievalBatch) -> float:
+        if isinstance(result, HybridRetrievalBatch):
+            return result.total_latency_ms
+        return result.retrieval_latency_ms
+
+    @staticmethod
+    def _lexical_latency(result: RetrievalBatch) -> float:
+        return result.lexical_latency_ms if isinstance(result, HybridRetrievalBatch) else 0
+
+    @staticmethod
+    def _fusion_latency(result: RetrievalBatch) -> float:
+        return result.fusion_latency_ms if isinstance(result, HybridRetrievalBatch) else 0
 
 
 def detect_question_language(question: str) -> DocumentLanguage:

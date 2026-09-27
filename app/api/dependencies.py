@@ -17,6 +17,8 @@ from app.ingestion.chunker import TokenWindowChunker
 from app.ingestion.parsers import ParserRegistry
 from app.ingestion.service import DocumentCatalogService, IngestionService
 from app.ingestion.storage import DocumentStorage
+from app.retrieval.hybrid import HybridRetrievalService, ModeAwareRetrievalService
+from app.retrieval.lexical import LexicalRetrievalService
 from app.retrieval.service import DenseRetrievalService, VectorIndexingService
 from app.retrieval.version_scope import VersionScopeResolver
 from app.vector_store.base import VectorStore
@@ -100,16 +102,50 @@ async def get_dense_retrieval_service(
         )
 
 
-async def get_rag_service(request: Request) -> AsyncIterator[RagAnswerService]:
+async def get_lexical_retrieval_service(
+    request: Request,
+) -> AsyncIterator[LexicalRetrievalService]:
     database = get_database(request)
     async for session in database.session():
-        retrieval = DenseRetrievalService(
+        yield LexicalRetrievalService(session)
+
+
+async def get_hybrid_retrieval_service(
+    request: Request,
+) -> AsyncIterator[HybridRetrievalService]:
+    database = get_database(request)
+    settings = get_request_settings(request)
+    async for session in database.session():
+        dense = DenseRetrievalService(
             session, get_embedding_provider(request), get_vector_store(request)
+        )
+        yield HybridRetrievalService(
+            dense,
+            LexicalRetrievalService(session),
+            dense_candidate_limit=settings.dense_candidate_limit,
+            lexical_candidate_limit=settings.lexical_candidate_limit,
+            rrf_k=settings.rrf_k,
+        )
+
+
+async def get_rag_service(request: Request) -> AsyncIterator[RagAnswerService]:
+    database = get_database(request)
+    settings = get_request_settings(request)
+    async for session in database.session():
+        dense = DenseRetrievalService(
+            session, get_embedding_provider(request), get_vector_store(request)
+        )
+        hybrid = HybridRetrievalService(
+            dense,
+            LexicalRetrievalService(session),
+            dense_candidate_limit=settings.dense_candidate_limit,
+            lexical_candidate_limit=settings.lexical_candidate_limit,
+            rrf_k=settings.rrf_k,
         )
         yield RagAnswerService(
             session=session,
             scope_resolver=VersionScopeResolver(session),
-            retrieval=retrieval,
+            retrieval=ModeAwareRetrievalService(dense, hybrid),
             context_builder=EvidenceContextBuilder(
                 get_request_settings(request).rag_max_context_characters,
                 get_request_settings(request).citation_excerpt_max_characters,

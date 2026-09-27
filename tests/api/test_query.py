@@ -18,12 +18,17 @@ from app.models.query import (
     ResolvedScope,
     ResolvedVersion,
 )
+from app.models.retrieval import RetrievalMode
 from app.models.versioning import DocumentLanguage
 from app.retrieval.version_scope import VersionScopeError
 
 
 class FakeRagService:
+    def __init__(self) -> None:
+        self.last_request: QueryRequest | None = None
+
     async def answer(self, request: QueryRequest) -> QueryResponse:
+        self.last_request = request
         version_id = request.version_selector.document_version_id or uuid4()
         return QueryResponse(
             answer="Grounded answer [S1].",
@@ -126,13 +131,34 @@ async def test_query_response_schema_and_debug_mode(app: FastAPI, client: AsyncC
 
 @pytest.mark.asyncio
 async def test_query_accepts_retrieval_only_mode(app: FastAPI, client: AsyncClient) -> None:
-    app.dependency_overrides[get_rag_service] = lambda: FakeRagService()
+    service = FakeRagService()
+    app.dependency_overrides[get_rag_service] = lambda: service
     response = await client.post(
         "/api/query",
-        json={"question": "What changed?", "retrieval_only": True},
+        json={
+            "question": "What changed?",
+            "retrieval_mode": "hybrid",
+            "retrieval_only": True,
+            "debug": True,
+        },
     )
 
     assert response.status_code == 200
+    assert service.last_request is not None
+    assert service.last_request.retrieval_mode is RetrievalMode.HYBRID
+    assert service.last_request.retrieval_only is True
+
+
+@pytest.mark.asyncio
+async def test_query_dense_mode_remains_default(app: FastAPI, client: AsyncClient) -> None:
+    service = FakeRagService()
+    app.dependency_overrides[get_rag_service] = lambda: service
+
+    response = await client.post("/api/query", json={"question": "Question"})
+
+    assert response.status_code == 200
+    assert service.last_request is not None
+    assert service.last_request.retrieval_mode is RetrievalMode.DENSE
 
 
 @pytest.mark.asyncio

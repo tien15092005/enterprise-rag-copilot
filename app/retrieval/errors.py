@@ -19,3 +19,8 @@ class VectorIndexingError(AppError):
 class RetrievalProvenanceError(AppError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="retrieval_provenance_mismatch", status_code=500)
+
+
+class InvalidRetrievalScopeError(AppError):
+    def __init__(self, message: str = "retrieval requires at least one document version") -> None:
+        super().__init__(message, code="invalid_retrieval_scope", status_code=422)

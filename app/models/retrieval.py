@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.models.versioning import DocumentLanguage, VectorIndexStatus
+
+
+class RetrievalMode(StrEnum):
+    DENSE = "dense"
+    HYBRID = "hybrid"
 
 
 class VectorIndexResponse(BaseModel):
@@ -37,6 +43,34 @@ class DenseRetrievalCandidate(BaseModel):
     language: DocumentLanguage
 
 
+class LexicalRetrievalCandidate(BaseModel):
+    chunk_id: UUID
+    document_version_id: UUID
+    logical_document_id: UUID
+    text: str
+    lexical_score: float
+    ordinal: int
+    page: int | None
+    section_path: list[str] | None
+    language: DocumentLanguage
+
+
+class HybridRetrievalCandidate(BaseModel):
+    chunk_id: UUID
+    document_version_id: UUID
+    logical_document_id: UUID
+    text: str
+    ordinal: int
+    page: int | None
+    section_path: list[str] | None
+    language: DocumentLanguage
+    dense_rank: int | None = None
+    dense_score: float | None = None
+    lexical_rank: int | None = None
+    lexical_score: float | None = None
+    rrf_score: float
+
+
 class DenseRetrievalResponse(BaseModel):
     document_version_id: UUID
     embedding_model: str
@@ -53,3 +87,46 @@ class DenseRetrievalBatch(BaseModel):
     embedding_latency_ms: float
     retrieval_latency_ms: float
     total_latency_ms: float
+
+
+class LexicalRetrievalResponse(BaseModel):
+    document_version_id: UUID
+    candidates: list[LexicalRetrievalCandidate]
+    retrieval_latency_ms: float
+    total_latency_ms: float
+
+
+class LexicalRetrievalBatch(BaseModel):
+    document_version_ids: list[UUID]
+    candidates: list[LexicalRetrievalCandidate]
+    retrieval_latency_ms: float
+    total_latency_ms: float
+
+
+class HybridRetrievalResponse(BaseModel):
+    document_version_id: UUID
+    candidates: list[HybridRetrievalCandidate]
+    dense_latency_ms: float
+    lexical_latency_ms: float
+    fusion_latency_ms: float
+    total_latency_ms: float
+    dense_candidate_count: int
+    lexical_candidate_count: int
+    merged_duplicate_count: int
+
+
+class HybridRetrievalBatch(BaseModel):
+    document_version_ids: list[UUID]
+    candidates: list[HybridRetrievalCandidate]
+    embedding_latency_ms: float
+    dense_latency_ms: float
+    lexical_latency_ms: float
+    fusion_latency_ms: float
+    total_latency_ms: float
+    dense_candidate_count: int
+    lexical_candidate_count: int
+    merged_duplicate_count: int
+
+
+RetrievalCandidate = DenseRetrievalCandidate | HybridRetrievalCandidate
+RetrievalBatch = DenseRetrievalBatch | HybridRetrievalBatch

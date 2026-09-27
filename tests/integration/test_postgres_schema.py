@@ -22,11 +22,17 @@ async def test_postgres_migration_created_phase_two_tables() -> None:
                     )
                 )
             )
+            index_names = set(
+                await connection.scalars(
+                    text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
+                )
+            )
         assert {
             "logical_documents",
             "document_versions",
             "chunks",
             "ingestion_jobs",
         } <= table_names
+        assert {"ix_chunks_fts_english", "ix_chunks_fts_simple"} <= index_names
     finally:
         await engine.dispose()

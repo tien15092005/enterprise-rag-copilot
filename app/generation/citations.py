@@ -9,7 +9,10 @@ from uuid import UUID
 from app.core.exceptions import AppError
 from app.generation.errors import CitationValidationError
 from app.models.query import Citation
-from app.models.retrieval import DenseRetrievalCandidate
+from app.models.retrieval import (
+    HybridRetrievalCandidate,
+    RetrievalCandidate,
+)
 from app.models.versioning import DocumentLanguage
 
 _CITATION_PATTERN = re.compile(r"\[(S\d+)\]")
@@ -27,7 +30,7 @@ class CitationScopeError(AppError):
 
 @dataclass(frozen=True, slots=True)
 class CitationSource:
-    candidate: DenseRetrievalCandidate
+    candidate: RetrievalCandidate
     document_title: str
     version_label: str
     source_filename: str
@@ -48,6 +51,11 @@ class CitationRecord:
     excerpt: str
     rank: int
     retrieval_score: float
+    dense_rank: int | None
+    dense_score: float | None
+    lexical_rank: int | None
+    lexical_score: float | None
+    rrf_score: float | None
     language: DocumentLanguage
     effective_from: datetime | None
     effective_to: datetime | None
@@ -65,6 +73,11 @@ class CitationRecord:
             excerpt=self.excerpt,
             rank=self.rank,
             retrieval_score=self.retrieval_score,
+            dense_rank=self.dense_rank,
+            dense_score=self.dense_score,
+            lexical_rank=self.lexical_rank,
+            lexical_score=self.lexical_score,
+            rrf_score=self.rrf_score,
             language=self.language,
             effective_from=self.effective_from,
             effective_to=self.effective_to,
@@ -103,6 +116,20 @@ class CitationFactory:
             and source.candidate.document_version_id not in allowed_version_ids
         ):
             raise CitationScopeError(source.candidate.document_version_id)
+        if isinstance(source.candidate, HybridRetrievalCandidate):
+            retrieval_score = source.candidate.rrf_score
+            dense_rank = source.candidate.dense_rank
+            dense_score = source.candidate.dense_score
+            lexical_rank = source.candidate.lexical_rank
+            lexical_score = source.candidate.lexical_score
+            rrf_score = source.candidate.rrf_score
+        else:
+            retrieval_score = source.candidate.score
+            dense_rank = rank
+            dense_score = source.candidate.score
+            lexical_rank = None
+            lexical_score = None
+            rrf_score = None
         return CitationRecord(
             citation_key=citation_key_for_rank(rank),
             logical_document_id=source.candidate.logical_document_id,
@@ -114,7 +141,12 @@ class CitationFactory:
             section_path=source.candidate.section_path,
             excerpt=supplied_text[: self._excerpt_max_characters],
             rank=rank,
-            retrieval_score=source.candidate.score,
+            retrieval_score=retrieval_score,
+            dense_rank=dense_rank,
+            dense_score=dense_score,
+            lexical_rank=lexical_rank,
+            lexical_score=lexical_score,
+            rrf_score=rrf_score,
             language=source.candidate.language,
             effective_from=source.effective_from,
             effective_to=source.effective_to,

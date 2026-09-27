@@ -6,8 +6,8 @@ versions of the same logical document.
 
 ## Current status
 
-Phase 4 implements the first bilingual, evidence-grounded RAG baseline on top of the
-logical-document catalog and dense retrieval system:
+Phase 6 implements bilingual, version-aware hybrid retrieval on top of the evidence-grounded RAG
+baseline:
 
 - Immutable document-version records grouped under stable logical documents.
 - Local filesystem source storage behind a replaceable storage protocol.
@@ -22,6 +22,9 @@ logical-document catalog and dense retrieval system:
 - Idempotent Qdrant upserts with deterministic chunk UUIDs and version-filter payloads.
 - Explicit vector indexing states (`not_indexed`, `indexing`, `indexed`, `failed`).
 - Dense retrieval scoped to exactly one caller-supplied document version.
+- PostgreSQL full-text lexical retrieval using `english` for English and `simple` for Vietnamese.
+- Explicit Reciprocal Rank Fusion (RRF) with per-branch rank and score provenance.
+- Dense and lexical branches filtered by the same resolved immutable version IDs.
 - PostgreSQL provenance validation for every Qdrant search result.
 - Explicit exact, current, all-version, and as-of scope resolution.
 - Bounded ranked evidence contexts with stable citation keys.
@@ -29,8 +32,8 @@ logical-document catalog and dense retrieval system:
 - English/Vietnamese answer-language behavior and deterministic no-evidence refusal.
 - Structured citations resolved only from evidence actually supplied to the LLM.
 
-Lexical/hybrid retrieval, RRF, reranking, version comparison, agents, and final evaluation
-benchmarking are intentionally not implemented yet.
+Reranking, version comparison, agents, and final evaluation benchmarking are intentionally not
+implemented yet.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
@@ -66,6 +69,8 @@ The application exposes:
 - `GET /api/document-versions/{document_version_id}` for ingestion and chunk status.
 - `POST /api/document-versions/{document_version_id}/index` for explicit vector indexing.
 - `POST /api/retrieval/dense` for engineering/debug exact-version retrieval.
+- `POST /api/retrieval/lexical` for engineering/debug exact-version PostgreSQL FTS retrieval.
+- `POST /api/retrieval/hybrid` for engineering/debug exact-version RRF retrieval.
 - `POST /api/query` for version-scoped RAG answering with structured citations.
 - `GET /docs` for generated OpenAPI documentation.
 
@@ -102,7 +107,7 @@ It is only the single version explicitly marked `active` while its indexing stat
 new active version explicitly supersedes the previous active version. Changing ready source
 content or source-semantic metadata requires creating a new version/revision.
 
-## Embeddings and dense retrieval
+## Dense, lexical, and hybrid retrieval
 
 The default local provider is `intfloat/multilingual-e5-small` (384 dimensions), selected as a
 lightweight multilingual baseline for English and Vietnamese. Its repository revision is pinned
@@ -129,6 +134,19 @@ PostgreSQL is authoritative for source snapshots, chunks, text, lifecycle state,
 Qdrant owns only reconstructable embeddings plus the minimal filter/citation payload. Re-indexing
 uses each chunk UUID as its point ID, so it replaces the same points instead of creating duplicates.
 An indexing failure is recorded explicitly and never marks the version indexed.
+
+Lexical retrieval searches authoritative PostgreSQL chunk text. English chunks use the `english`
+text-search configuration, which provides English stemming. Vietnamese chunks use `simple`, which
+preserves tokens and diacritics but provides no Vietnamese-specific stemming or sophisticated
+linguistic tokenization. Expression GIN indexes support both configurations.
+
+Hybrid mode retrieves bounded candidate lists from Qdrant and PostgreSQL using the exact same
+resolved version IDs, then fuses their ranks with `1 / (RRF_K + rank)`. The default `RRF_K=60` is
+a conventional starting point, not a claim of global optimality. Duplicate chunks are merged by
+`chunk_id`; debug citation metadata retains dense rank/score, lexical rank/score, and final RRF
+score. Raw cosine and PostgreSQL scores are never averaged. `/api/query` accepts
+`retrieval_mode: "dense" | "hybrid"`; dense remains the default for compatibility until evaluation
+justifies changing it. Reranking is not implemented in Phase 6.
 
 ## End-to-end RAG flow
 
@@ -289,8 +307,10 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
 - Chunking uses transparent whitespace-token windows and does not claim linguistic optimality.
 - Deletion endpoints and retention policies are deferred; stored failed-upload sources remain
   available for diagnosis.
-- Retrieval remains dense-only. PostgreSQL lexical search, hybrid fusion/RRF, and reranking are not
-  implemented.
+- PostgreSQL `simple` search is only a transparent Vietnamese lexical baseline; it has no
+  Vietnamese stemmer and may miss differently segmented or inflected terms.
+- Hybrid candidate limits and `RRF_K` have not been tuned by the later evaluation phase.
+- Reranking is not implemented.
 - Qdrant and PostgreSQL do not share a transaction. Explicit failed state and idempotent point IDs
   make retries safe, while reconciliation tooling remains future work.
 - Dense retrieval quality has only been smoke-tested with the included English and Vietnamese
