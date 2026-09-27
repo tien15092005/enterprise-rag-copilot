@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     reranker_cache_directory: str = "data/model_cache"
     rerank_candidate_limit: int = Field(default=20, ge=1, le=100)
     rerank_final_top_k: int = Field(default=5, ge=1, le=100)
+    comparison_content_similarity_threshold: float = Field(default=0.6, ge=0, le=1)
+    comparison_semantic_similarity_threshold: float = Field(default=0.95, ge=-1, le=1)
+    comparison_max_sections: int = Field(default=100, ge=1, le=1000)
 
     @model_validator(mode="after")
     def validate_reranking_limits(self) -> Settings:

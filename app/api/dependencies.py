@@ -6,6 +6,7 @@ from typing import cast
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.comparison.service import DocumentComparisonService
 from app.core.config import Settings
 from app.db.session import Database
 from app.embeddings.base import EmbeddingProvider
@@ -162,6 +163,19 @@ async def get_rag_service(request: Request) -> AsyncIterator[RagAnswerService]:
                 get_request_settings(request).rag_max_context_characters,
                 get_request_settings(request).citation_excerpt_max_characters,
             ),
+            llm=cast(LLMProvider | None, request.app.state.llm_provider),
+            settings=get_request_settings(request),
+        )
+
+
+async def get_comparison_service(
+    request: Request,
+) -> AsyncIterator[DocumentComparisonService]:
+    database = get_database(request)
+    async for session in database.session():
+        yield DocumentComparisonService(
+            session=session,
+            embeddings=get_embedding_provider(request),
             llm=cast(LLMProvider | None, request.app.state.llm_provider),
             settings=get_request_settings(request),
         )

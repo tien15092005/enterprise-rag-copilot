@@ -6,8 +6,8 @@ versions of the same logical document.
 
 ## Current status
 
-Phase 8 implements reproducible bilingual evaluation on top of the version-aware, reranked RAG
-pipeline:
+Phase 9A adds deterministic bilingual comparison of two explicit immutable versions on top of the
+evaluated, version-aware RAG pipeline:
 
 - Immutable document-version records grouped under stable logical documents.
 - Local filesystem source storage behind a replaceable storage protocol.
@@ -36,8 +36,10 @@ pipeline:
 - Repository-owned English/Vietnamese, multi-document, multi-version evaluation fixtures.
 - HitRate@K, Recall@K, binary nDCG@K, MRR, version leakage, and latency reporting.
 - Reproducible JSON/CSV experiment artifacts and a generated Markdown report.
+- First-class English/Vietnamese comparison with deterministic section alignment and change types.
+- Optional, citation-validated LLM summaries over structured comparison evidence.
 
-Version comparison, agents, and production hardening are intentionally not implemented yet.
+Agent orchestration and production hardening are intentionally not implemented yet.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
@@ -76,6 +78,8 @@ The application exposes:
 - `POST /api/retrieval/lexical` for engineering/debug exact-version PostgreSQL FTS retrieval.
 - `POST /api/retrieval/hybrid` for engineering/debug exact-version RRF retrieval.
 - `POST /api/query` for version-scoped RAG answering with structured citations.
+- `POST /api/compare` for deterministic comparison of two explicit versions of one logical
+  document, with an optional generated summary.
 - `GET /docs` for generated OpenAPI documentation.
 
 ## Ingestion architecture
@@ -299,6 +303,55 @@ For exact scope, use
 `{"kind":"as_of","as_of":"2026-01-15T00:00:00Z"}`. The `all` selector uses
 `{"kind":"all"}`.
 
+Compare two immutable versions of the same logical document:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/compare `
+  -ContentType application/json `
+  -Body (@{
+    logical_document_id = $document.logical_document_id
+    left_document_version_id = $version2025Id
+    right_document_version_id = $version2026Id
+    include_unchanged = $true
+    generate_summary = $false
+    debug = $true
+  } | ConvertTo-Json)
+```
+
+## Version comparison
+
+Comparison is a separate application workflow from query retrieval: both input version IDs are
+explicit, immutable, ready, distinct, and validated as members of the requested logical document.
+It never infers version identity from filenames, labels, timestamps, or upload order, and it does
+not search a third version.
+
+The deterministic aligner aggregates chunks within each section and tries, in order: exact section
+path, normalized section path, exact/normalized leaf heading, section fingerprint, content
+similarity, then a bounded multilingual embedding fallback.
+Scores below the configured threshold remain unmatched. Stable tie-breaking preserves source
+order. An unmatched left section is `removed`, an unmatched right section is `added`, identical
+normalized aligned text is `unchanged`, and other aligned text is `modified`. Modified items carry
+a sentence-level added/removed representation while preserving the original English or Vietnamese
+text. The defaults are configurable with `COMPARISON_CONTENT_SIMILARITY_THRESHOLD`,
+`COMPARISON_SEMANTIC_SIMILARITY_THRESHOLD`, and `COMPARISON_MAX_SECTIONS`.
+
+Citation records are built from the selected versions before generation and include an explicit
+`left` or `right` side plus the immutable document-version provenance. Modified and unchanged items
+make both sides citable; additions cite only the right; removals cite only the left. With
+`generate_summary=false`, the response returns structured comparison items and citations without
+an LLM call and generation latency is zero. With generation enabled, the LLM receives only the
+structured comparison evidence; the existing validator rejects unknown citation keys. The
+controlled verifier is reproducible without a paid provider:
+
+```powershell
+.venv\Scripts\python scripts\verify_comparison.py
+```
+
+Current limitations: alignment thresholds are an engineering baseline rather than benchmarked
+comparison metrics; sentence splitting is intentionally lightweight; moved or heavily rewritten
+sections may remain added/removed; there is no automatic claim/evidence entailment verifier; and
+the generated-summary prompt cannot replace deterministic change classification.
+
 ## Migrations
 
 ```powershell
@@ -319,8 +372,8 @@ for ORM writes.
 ## Verification
 
 ```powershell
-.venv\Scripts\python -m ruff format --check app tests
-.venv\Scripts\python -m ruff check app tests
+.venv\Scripts\python -m ruff format --check app tests scripts
+.venv\Scripts\python -m ruff check app tests scripts
 .venv\Scripts\python -m mypy app
 .venv\Scripts\python -m pytest
 docker compose config
@@ -379,4 +432,6 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
 - Citation-key validation proves that a key maps to supplied evidence, not that every natural-
   language claim is semantically entailed by that evidence. Automatic claim/evidence verification
   is deferred.
-- Version comparison, agents, and production hardening are not implemented.
+- Comparison alignment has not yet been evaluated on a broad external corpus, and semantic
+  fallback thresholds may require domain-specific tuning.
+- Agents and production hardening are not implemented.

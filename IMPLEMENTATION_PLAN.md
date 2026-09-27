@@ -322,9 +322,17 @@ python -m mypy app
 
 ## Phase 9A - Version comparison application service
 
+Status: implemented. The typed comparison API validates two explicit immutable versions, loads
+only their authoritative sections, aligns them deterministically with an optional multilingual
+semantic fallback, classifies four change types, emits sentence-level diffs and side-aware
+citations, and optionally generates a citation-validated summary.
+
 ### Objective
 
-Implement an explicit two-version comparison application service and `/compare` API. Retrieve inside each version independently, align candidate sections using interpretable metadata and semantic signals, classify changes, answer version-difference questions, and return citations from base and target versions. Do not add agent orchestration in this subphase.
+Implement an explicit two-version comparison application service and `/compare` API. Load sections
+only from each selected version, align them using interpretable metadata and semantic signals,
+classify changes, optionally explain the deterministic result, and return citations from left and
+right versions. Do not add agent orchestration in this subphase.
 
 ### Files/modules affected
 
@@ -332,6 +340,7 @@ Implement an explicit two-version comparison application service and `/compare` 
 - `app/api/routes/comparisons.py`
 - Comparison request, change-item, and response schemas
 - Bilingual multi-version comparison fixtures
+- `scripts/verify_comparison.py`
 - `tests/comparison/`, `tests/api/test_compare.py`
 
 ### Test criteria
@@ -349,7 +358,8 @@ Implement an explicit two-version comparison application service and `/compare` 
 ```powershell
 python -m pytest tests/comparison tests/api/test_compare.py
 python -m pytest -k "comparison or version_alignment"
-python -m ruff check app tests
+python scripts/verify_comparison.py
+python -m ruff check app tests scripts
 python -m mypy app
 ```
 

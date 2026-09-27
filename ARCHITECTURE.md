@@ -4,7 +4,9 @@
 
 Enterprise Knowledge Copilot is a production-oriented, version-aware Retrieval-Augmented Generation (RAG) backend for internal enterprise documents. Its distinguishing capability is treating successive files such as `HR_Policy_2025.pdf` and `HR_Policy_2026.pdf` as immutable versions of one logical document. The system is designed to retrieve from an exact version or an intentional version scope, compare versions, explain changes, and cite evidence from both sides of a comparison.
 
-The initial system supports English and Vietnamese PDF, DOCX, TXT, and Markdown ingestion; dense and hybrid retrieval; optional reranking; cited answers; reproducible evaluation; and a small, controlled tool-calling layer. Version comparison is an explicitly planned application capability, but its comparison engine is not part of Phase 0 or Phase 1.
+The implemented system supports English and Vietnamese PDF, DOCX, TXT, and Markdown ingestion;
+dense and hybrid retrieval; optional reranking; cited answers; reproducible evaluation; and
+deterministic two-version comparison. A small controlled tool-calling layer remains a later phase.
 
 The initial deployment is a modular monolith. FastAPI exposes the REST API, while application services keep parsing, chunking, embedding, retrieval, reranking, generation, and evaluation separate. This preserves understandable source code and permits individual components to be replaced without introducing distributed-system complexity prematurely.
 
@@ -26,7 +28,7 @@ FastAPI application
     |                 --> score fusion --> reranker --> context builder
     |                 --> LLM provider --> citation validator --> response
     |
-    |-- comparison service --> version-scoped retrieval x 2
+    |-- comparison service --> authoritative section load x 2
     |                      --> section alignment/change analysis
     |                      --> dual-version cited response
     |
@@ -159,7 +161,8 @@ Planned endpoints:
 - `GET /documents/{logical_document_id}/versions`: list immutable versions and lifecycle metadata.
 - `DELETE /document-versions/{document_version_id}`: remove one version, its chunks, and vectors subject to retention rules.
 - `POST /query`: retrieve evidence from a current, exact, all-version, or as-of version scope and optionally generate a cited answer.
-- `POST /compare`: compare two explicit versions of the same logical document; introduced only when the comparison service is implemented.
+- `POST /compare`: compare two explicit immutable versions of the same logical document and
+  optionally summarize the deterministic result.
 - `POST /evaluation/run`: run a named, versioned evaluation dataset.
 - `GET /evaluation/results`: list or retrieve persisted experiment results.
 
@@ -283,6 +286,41 @@ relevance averages and receive a separate empty-result rate. Every returned cand
 against the resolver's explicit version IDs; wrong-version counts and exact/current/`as_of`
 violations are reported as failures. Cold/first-request probes are separate from warm mean, p50,
 and nearest-rank p95 latency summaries.
+
+### Version comparison
+
+Comparison is intentionally separate from query retrieval. Retrieval answers a question from a
+selected scope; comparison exhaustively loads the bounded authoritative sections of exactly two
+caller-selected immutable versions and describes structural/content change. Both versions must be
+ready, distinct, share one logical-document ID, and use the same source language. Filenames,
+labels, timestamps, and upload order never select or reorder them.
+
+Chunks are grouped by section path in source order. Alignment proceeds deterministically through
+exact path, Unicode-normalized path, exact/normalized leaf heading, section fingerprint, normalized
+content similarity, and finally multilingual embedding similarity for still-unmatched sections.
+The content and semantic thresholds and maximum section count are configured. Candidate pairs sort
+by descending score and then source ordinals;
+scores below threshold remain unmatched, preventing forced low-confidence pairs. Semantic fallback
+embeds only sections from the two selected versions and cannot introduce external candidates.
+
+The service classifies unmatched-left as `removed`, unmatched-right as `added`, identical normalized
+aligned text as `unchanged`, and differing aligned text as `modified`. Modified pairs also receive a
+lightweight sentence-level added/removed diff that preserves the original language. Classification,
+version provenance, ordering, and citations are deterministic and never delegated to an LLM.
+
+Comparison citations reuse the citation factory and validator. Keys are assigned before generation
+in comparison-item and side order. Modified items make left and right evidence citable; added items
+cite right only; removed items cite left only; unchanged items expose both sides when included. Each
+response citation explicitly labels its side and immutable version ID. Unknown model-produced keys
+are rejected. `generate_summary=false` is the comparison-only mode: it performs alignment and
+classification, returns structured evidence, makes no LLM call, and reports zero generation
+latency. With summary generation enabled, the provider sees only labeled structured items and must
+write in the requested language.
+
+The current sentence splitter and similarity thresholds are transparent baselines. There is no
+automatic claim-entailment verifier, no broad comparison benchmark yet, and heavily rewritten or
+moved sections may remain an added/removed pair. The LLM explains deterministic evidence; it does
+not decide the change types.
 
 ### Controlled agent layer
 
@@ -421,14 +459,17 @@ For the first implementation, this work may execute in-process. The service boun
 8. Citation validator resolves cited keys and flags malformed/unknown or out-of-scope citations.
 9. Response returns answer, structured version-aware citations, timing metadata, and debug scores/resolved version scope only when requested.
 
-### Version comparison flow (future Phase 9A)
+### Version comparison flow (implemented Phase 9A)
 
 1. API/service requires one logical document and two explicit ready version IDs belonging to it; `base` and `target` order is never inferred.
-2. Candidate sections are retrieved independently inside each version. Headings, normalized section paths, fingerprints, and semantic similarity provide alignment signals.
+2. Authoritative chunks are loaded from only those versions and aggregated by section. Headings,
+   normalized section paths, fingerprints, content similarity, and semantic similarity provide
+   alignment signals.
 3. Alignment classifies section pairs as added, removed, modified, or unchanged and records confidence. It must preserve unmatched sections rather than forcing a pair.
-4. Relevant changed pairs are selected for the user's question, or all changes are summarized within bounded limits.
-5. Generation receives labeled base/target evidence and must describe only supported changes.
-6. Response returns structured change items and citations from both versions. One-sided citations are valid for additions/removals; modified claims should normally cite both sides.
+4. The caller may include or omit unchanged items; all four counts always describe the full result.
+5. Optional generation receives labeled left/right evidence and must describe only supported changes.
+6. Response returns structured change items and citations from both versions. One-sided citations
+   are valid for additions/removals; modified claims should normally cite both sides.
 
 Comparison is not a plain global text diff: parsing and formatting can shift chunk boundaries. The first implementation favors interpretable heading/path alignment plus semantic candidate matching. Exact text diff may be applied only after sections are aligned. Alignment quality receives its own evaluation fixtures.
 
