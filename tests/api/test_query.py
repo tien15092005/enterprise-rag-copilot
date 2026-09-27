@@ -9,7 +9,9 @@ from httpx import AsyncClient
 
 from app.api.dependencies import get_rag_service
 from app.models.query import (
-    DebugCandidate,
+    Citation,
+    CitationValidationDebug,
+    QueryDebug,
     QueryRequest,
     QueryResponse,
     QueryTiming,
@@ -48,21 +50,36 @@ class FakeRagService:
                 total_ms=11,
             ),
             token_usage=None,
-            prompt_version="rag_baseline_v1",
+            prompt_version="citation_baseline_v2",
             insufficient_evidence=False,
-            debug_candidates=(
-                [
-                    DebugCandidate(
-                        citation_key="S1",
-                        chunk_id=uuid4(),
-                        document_version_id=version_id,
-                        score=0.9,
-                        ordinal=0,
-                        page=None,
-                        section_path=None,
-                        language=DocumentLanguage.ENGLISH,
-                    )
-                ]
+            debug=(
+                QueryDebug(
+                    evidence=[
+                        Citation(
+                            citation_key="S1",
+                            logical_document_id=request.logical_document_id or uuid4(),
+                            document_version_id=version_id,
+                            version_label="2026",
+                            chunk_id=uuid4(),
+                            source_filename="handbook.md",
+                            page=None,
+                            section_path=None,
+                            excerpt="Grounded evidence.",
+                            rank=1,
+                            retrieval_score=0.9,
+                            language=DocumentLanguage.ENGLISH,
+                            effective_from=None,
+                            effective_to=None,
+                        )
+                    ],
+                    citation_validation=CitationValidationDebug(
+                        status="validated",
+                        referenced_keys=["S1"],
+                        normalized_keys=["S1"],
+                        duplicate_keys=[],
+                        omitted_evidence_keys=[],
+                    ),
+                )
                 if request.debug
                 else None
             ),
@@ -90,9 +107,21 @@ async def test_query_response_schema_and_debug_mode(app: FastAPI, client: AsyncC
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload) == {
+        "answer",
+        "answer_language",
+        "citations",
+        "resolved_scope",
+        "timing",
+        "token_usage",
+        "prompt_version",
+        "insufficient_evidence",
+        "debug",
+    }
     assert payload["resolved_scope"]["kind"] == "current"
-    assert payload["debug_candidates"][0]["score"] == 0.9
-    assert payload["prompt_version"] == "rag_baseline_v1"
+    assert payload["debug"]["evidence"][0]["retrieval_score"] == 0.9
+    assert payload["debug"]["citation_validation"]["status"] == "validated"
+    assert payload["prompt_version"] == "citation_baseline_v2"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from uuid import uuid4
 
-from app.generation.context import EvidenceContextBuilder, EvidenceMetadata
+from app.generation.citations import CitationSource
+from app.generation.context import EvidenceContextBuilder
 from app.models.retrieval import DenseRetrievalCandidate
 from app.models.versioning import DocumentLanguage
 
@@ -24,8 +25,8 @@ def test_context_preserves_ranking_metadata_and_stable_keys() -> None:
     second = candidate("Second ranked evidence", 0.8)
     built = EvidenceContextBuilder(2000).build(
         [
-            EvidenceMetadata(first, "Handbook", "2026", "handbook.pdf"),
-            EvidenceMetadata(second, "Handbook", "2025", "handbook.pdf"),
+            CitationSource(first, "Handbook", "2026", "handbook.pdf"),
+            CitationSource(second, "Handbook", "2025", "handbook.pdf"),
         ]
     )
 
@@ -33,7 +34,8 @@ def test_context_preserves_ranking_metadata_and_stable_keys() -> None:
     assert built.text.index("Highest ranked") < built.text.index("Second ranked")
     assert built.evidence[0].citation.page == 3
     assert built.evidence[0].citation.section_path == ["Leave", "Annual"]
-    assert built.evidence[0].citation.filename == "handbook.pdf"
+    assert built.evidence[0].citation.source_filename == "handbook.pdf"
+    assert built.evidence[0].citation.rank == 1
 
 
 def test_context_limit_keeps_highest_ranked_evidence_first() -> None:
@@ -42,8 +44,8 @@ def test_context_limit_keeps_highest_ranked_evidence_first() -> None:
 
     built = EvidenceContextBuilder(300).build(
         [
-            EvidenceMetadata(first, "Handbook", "2026", "handbook.pdf"),
-            EvidenceMetadata(second, "Handbook", "2025", "handbook.pdf"),
+            CitationSource(first, "Handbook", "2026", "handbook.pdf"),
+            CitationSource(second, "Handbook", "2025", "handbook.pdf"),
         ]
     )
 

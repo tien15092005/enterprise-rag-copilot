@@ -11,13 +11,14 @@ from sqlalchemy.orm import joinedload
 from app.core.config import Settings
 from app.core.telemetry import request_id_context
 from app.db.models import DocumentVersion
-from app.generation.context import BuiltContext, EvidenceContextBuilder, EvidenceMetadata
-from app.generation.errors import CitationValidationError, LLMConfigurationError
+from app.generation.citations import CitationSource, CitationValidationResult, CitationValidator
+from app.generation.context import BuiltContext, EvidenceContextBuilder
+from app.generation.errors import LLMConfigurationError
 from app.generation.prompts import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt
 from app.generation.providers.base import LLMProvider, LLMRequest
 from app.models.query import (
-    Citation,
-    DebugCandidate,
+    CitationValidationDebug,
+    QueryDebug,
     QueryRequest,
     QueryResponse,
     QueryTiming,
@@ -30,7 +31,6 @@ from app.retrieval.service import DenseRetrievalService
 from app.retrieval.version_scope import VersionScopeResolver
 
 logger = logging.getLogger(__name__)
-_CITATION_PATTERN = re.compile(r"\[(S\d+)\]")
 _VIETNAMESE_PATTERN = re.compile(
     r"[ăâđêôơưĂÂĐÊÔƠƯ]|[àáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]",
     re.IGNORECASE,
@@ -53,6 +53,7 @@ class RagAnswerService:
         self._context_builder = context_builder
         self._llm = llm
         self._settings = settings
+        self._citation_validator = CitationValidator()
 
     async def answer(self, request: QueryRequest) -> QueryResponse:
         total_started = perf_counter()
@@ -70,7 +71,10 @@ class RagAnswerService:
         )
         evidence_metadata = await self._hydrate_evidence(retrieval_result.candidates)
         context_started = perf_counter()
-        context = self._context_builder.build(evidence_metadata)
+        context = self._context_builder.build(
+            evidence_metadata,
+            allowed_version_ids=set(version_ids),
+        )
         context_ms = (perf_counter() - context_started) * 1000
 
         if not context.evidence:
@@ -111,7 +115,10 @@ class RagAnswerService:
         generation_started = perf_counter()
         generated = await self._llm.generate(llm_request)
         generation_ms = (perf_counter() - generation_started) * 1000
-        citations = self._validated_citations(generated.text, context)
+        validation = self._citation_validator.validate(
+            generated.text,
+            tuple(item.citation for item in context.evidence),
+        )
         total_ms = (perf_counter() - total_started) * 1000
 
         logger.info(
@@ -132,7 +139,7 @@ class RagAnswerService:
         return QueryResponse(
             answer=generated.text,
             answer_language=language,
-            citations=citations,
+            citations=[citation.to_response() for citation in validation.citations],
             resolved_scope=scope,
             timing=QueryTiming(
                 scope_resolution_ms=scope_ms,
@@ -153,12 +160,12 @@ class RagAnswerService:
             ),
             prompt_version=PROMPT_VERSION,
             insufficient_evidence=False,
-            debug_candidates=(self._debug_candidates(context) if request.debug else None),
+            debug=(self._debug(context, validation) if request.debug else None),
         )
 
     async def _hydrate_evidence(
         self, candidates: list[DenseRetrievalCandidate]
-    ) -> list[EvidenceMetadata]:
+    ) -> list[CitationSource]:
         version_ids = {candidate.document_version_id for candidate in candidates}
         versions = list(
             await self._session.scalars(
@@ -169,45 +176,43 @@ class RagAnswerService:
         )
         by_id = {version.document_version_id: version for version in versions}
         return [
-            EvidenceMetadata(
+            CitationSource(
                 candidate=candidate,
                 document_title=by_id[candidate.document_version_id].logical_document.title,
                 version_label=by_id[candidate.document_version_id].version_label,
-                filename=by_id[candidate.document_version_id].source_filename,
+                source_filename=by_id[candidate.document_version_id].source_filename,
+                effective_from=by_id[candidate.document_version_id].effective_from,
+                effective_to=by_id[candidate.document_version_id].effective_to,
             )
             for candidate in candidates
             if candidate.document_version_id in by_id and candidate.text.strip()
         ]
 
     @staticmethod
-    def _validated_citations(text: str, context: BuiltContext) -> list[Citation]:
-        evidence_by_key = {item.citation.citation_key: item.citation for item in context.evidence}
-        referenced = list(dict.fromkeys(_CITATION_PATTERN.findall(text)))
-        unknown = [key for key in referenced if key not in evidence_by_key]
-        if unknown:
-            raise CitationValidationError(
-                "LLM referenced citation keys outside the supplied evidence",
-                unknown_keys=unknown,
-            )
-        if not referenced:
-            raise CitationValidationError("LLM answer did not include a supplied citation key")
-        return [evidence_by_key[key] for key in referenced]
+    def _debug(context: BuiltContext, validation: CitationValidationResult) -> QueryDebug:
+        return QueryDebug(
+            evidence=[item.citation.to_response() for item in context.evidence],
+            citation_validation=CitationValidationDebug(
+                status="validated",
+                referenced_keys=list(validation.referenced_keys),
+                normalized_keys=list(validation.normalized_keys),
+                duplicate_keys=list(validation.duplicate_keys),
+                omitted_evidence_keys=list(validation.omitted_evidence_keys),
+            ),
+        )
 
     @staticmethod
-    def _debug_candidates(context: BuiltContext) -> list[DebugCandidate]:
-        return [
-            DebugCandidate(
-                citation_key=item.citation.citation_key,
-                chunk_id=item.candidate.chunk_id,
-                document_version_id=item.candidate.document_version_id,
-                score=item.candidate.score,
-                ordinal=item.candidate.ordinal,
-                page=item.candidate.page,
-                section_path=item.candidate.section_path,
-                language=item.candidate.language,
-            )
-            for item in context.evidence
-        ]
+    def _not_applicable_debug(context: BuiltContext) -> QueryDebug:
+        return QueryDebug(
+            evidence=[item.citation.to_response() for item in context.evidence],
+            citation_validation=CitationValidationDebug(
+                status="not_applicable",
+                referenced_keys=[],
+                normalized_keys=[],
+                duplicate_keys=[],
+                omitted_evidence_keys=[],
+            ),
+        )
 
     def _insufficient_response(
         self,
@@ -258,7 +263,9 @@ class RagAnswerService:
             token_usage=None,
             prompt_version=PROMPT_VERSION,
             insufficient_evidence=True,
-            debug_candidates=[] if request.debug else None,
+            debug=(
+                self._not_applicable_debug(BuiltContext("", (), False)) if request.debug else None
+            ),
         )
 
     def _retrieval_only_response(
@@ -290,7 +297,7 @@ class RagAnswerService:
         return QueryResponse(
             answer=None,
             answer_language=language,
-            citations=[item.citation for item in context.evidence],
+            citations=[item.citation.to_response() for item in context.evidence],
             resolved_scope=scope,
             timing=QueryTiming(
                 scope_resolution_ms=scope_ms,
@@ -303,7 +310,7 @@ class RagAnswerService:
             token_usage=None,
             prompt_version=PROMPT_VERSION,
             insufficient_evidence=False,
-            debug_candidates=(self._debug_candidates(context) if request.debug else None),
+            debug=(self._not_applicable_debug(context) if request.debug else None),
         )
 
 

@@ -111,7 +111,8 @@ async def get_rag_service(request: Request) -> AsyncIterator[RagAnswerService]:
             scope_resolver=VersionScopeResolver(session),
             retrieval=retrieval,
             context_builder=EvidenceContextBuilder(
-                get_request_settings(request).rag_max_context_characters
+                get_request_settings(request).rag_max_context_characters,
+                get_request_settings(request).citation_excerpt_max_characters,
             ),
             llm=cast(LLMProvider | None, request.app.state.llm_provider),
             settings=get_request_settings(request),

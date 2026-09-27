@@ -153,10 +153,22 @@ Supported selectors are:
   requested timestamp. Missing and overlapping intervals return domain errors.
 
 The context builder preserves dense ranking and stops at `RAG_MAX_CONTEXT_CHARACTERS`, retaining
-higher-ranked evidence first. Each included chunk receives a stable response-local key such as
-`[S1]`. The prompt requires evidence-only answers and these keys; returned citation objects are
-resolved from the supplied evidence rather than trusting model-produced metadata. Unknown or
-missing citation keys cause a structured provider-response error.
+higher-ranked evidence first. The dedicated citation subsystem then deduplicates repeated chunk
+IDs, assigns response-local keys in final evidence order (`[S1]`, `[S2]`, ...), and creates the
+authoritative typed citation records before any LLM call. Each record preserves logical document,
+immutable version, version label/effective interval, chunk ID, source filename, page/section,
+rank, dense retrieval score, language, and a source-derived excerpt.
+
+The LLM can produce only citation keys, never citation metadata. Its references are validated
+against the evidence set: unknown keys and answers with no supplied key are rejected; repeated
+keys are normalized in first-reference order. By default the response returns only cited records;
+`debug: true` exposes full supplied evidence and validation metadata. Citation keys are stable
+within one response/context build, not permanent identifiers across queries.
+
+Excerpts are never model-generated or paraphrased. They are Unicode-safe prefixes of the actual
+chunk text supplied to the LLM, bounded by `CITATION_EXCERPT_MAX_CHARACTERS` (default 500) and,
+when context is tighter, by the text that actually fit in the context. Version-scope enforcement
+rejects any evidence whose immutable version is outside the resolved scope.
 
 Questions containing Vietnamese orthographic markers are answered in Vietnamese; other questions
 default to English. Source excerpts remain in their original language. If retrieval produces no
@@ -165,7 +177,8 @@ response without calling the LLM. No unvalidated similarity threshold is used in
 
 Set `retrieval_only` to `true` on `/api/query` to resolve any supported version selector and return
 the bounded evidence in `citations` without calling an LLM. In this mode `answer` is `null`,
-generation latency is zero, and no LLM provider needs to be configured.
+generation latency is zero, and no LLM provider needs to be configured. Debug validation is marked
+`not_applicable` because no model-produced keys exist.
 
 ## LLM providers
 
@@ -282,6 +295,7 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
   make retries safe, while reconciliation tooling remains future work.
 - Dense retrieval quality has only been smoke-tested with the included English and Vietnamese
   samples; no benchmark or evaluation score is claimed.
-- Citation keys are stable within one response/context build, not permanent identifiers across
-  different queries; chunk UUIDs provide the persistent evidence identity.
+- Citation-key validation proves that a key maps to supplied evidence, not that every natural-
+  language claim is semantically entailed by that evidence. Automatic claim/evidence verification
+  is deferred.
 - Version comparison, agents, and final evaluation benchmarking are not implemented.

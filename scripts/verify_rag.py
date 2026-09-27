@@ -19,8 +19,8 @@ from app.ingestion.parsers import DocxParser, MarkdownParser, ParserRegistry, Pd
 from app.ingestion.service import DocumentCatalogService, IngestionService
 from app.ingestion.storage import LocalFilesystemStorage
 from app.models.documents import DocumentVersionCreate, LogicalDocumentCreate
-from app.models.query import QueryRequest
-from app.models.versioning import DocumentLanguage
+from app.models.query import QueryRequest, QueryVersionSelector
+from app.models.versioning import DocumentLanguage, VersionSelectorKind
 from app.retrieval.service import DenseRetrievalService, VectorIndexingService
 from app.retrieval.version_scope import VersionScopeResolver
 from app.vector_store import QdrantVectorStore
@@ -168,6 +168,16 @@ async def run() -> None:
                     debug=True,
                 )
             )
+            exact = await rag.answer(
+                QueryRequest(
+                    question="How many days per week may employees work remotely?",
+                    version_selector=QueryVersionSelector(
+                        kind=VersionSelectorKind.EXACT,
+                        document_version_id=english_version_id,
+                    ),
+                    debug=True,
+                )
+            )
             insufficient_rag = RagAnswerService(
                 session,
                 resolver,
@@ -224,6 +234,7 @@ async def run() -> None:
                 "providers": provider_configuration,
                 "english": english.model_dump(mode="json"),
                 "vietnamese": vietnamese.model_dump(mode="json"),
+                "exact": exact.model_dump(mode="json"),
                 "retrieval_only": retrieval_only.model_dump(mode="json"),
                 "insufficient_evidence": insufficient.model_dump(mode="json"),
             }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -53,11 +54,16 @@ class Citation(BaseModel):
     logical_document_id: UUID
     document_version_id: UUID
     version_label: str
-    filename: str
     chunk_id: UUID
+    source_filename: str
     page: int | None
     section_path: list[str] | None
     excerpt: str
+    rank: int = Field(ge=1)
+    retrieval_score: float
+    language: DocumentLanguage
+    effective_from: datetime | None
+    effective_to: datetime | None
 
 
 class TokenUsage(BaseModel):
@@ -75,15 +81,17 @@ class QueryTiming(BaseModel):
     total_ms: float
 
 
-class DebugCandidate(BaseModel):
-    citation_key: str
-    chunk_id: UUID
-    document_version_id: UUID
-    score: float
-    ordinal: int
-    page: int | None
-    section_path: list[str] | None
-    language: DocumentLanguage
+class CitationValidationDebug(BaseModel):
+    status: Literal["validated", "not_applicable"]
+    referenced_keys: list[str]
+    normalized_keys: list[str]
+    duplicate_keys: list[str]
+    omitted_evidence_keys: list[str]
+
+
+class QueryDebug(BaseModel):
+    evidence: list[Citation]
+    citation_validation: CitationValidationDebug
 
 
 class QueryResponse(BaseModel):
@@ -95,4 +103,4 @@ class QueryResponse(BaseModel):
     token_usage: TokenUsage | None
     prompt_version: str
     insufficient_evidence: bool
-    debug_candidates: list[DebugCandidate] | None = None
+    debug: QueryDebug | None = None

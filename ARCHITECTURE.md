@@ -212,7 +212,18 @@ An `LLMProvider` interface exposes generation and structured tool-calling capabi
 
 The application does not require Ollama. If no usable LLM provider is configured, ingestion, retrieval, and retrieval evaluation remain available; generation endpoints return a clear configuration error or can return retrieval-only results when explicitly requested.
 
-The context builder assigns citation keys such as `[S1]` to retrieved chunks. The prompt requires answers to cite those keys and to state that evidence is insufficient when context does not support a claim. The citation validator maps keys back to immutable source metadata, rejects unknown citation keys, and returns structured citations containing `logical_document_id`, `document_version_id`, version label/effective date, filename, `chunk_id`, page/section when available, and debug scores when requested. A comparison response must distinguish old-version and new-version evidence and support citations from both. Citation validation cannot by itself prove semantic faithfulness; that is handled by evaluation.
+The dedicated citation subsystem constructs immutable evidence records before generation. It
+deduplicates chunks in final evidence order, assigns response-local keys such as `[S1]`, and
+captures logical-document ID, document-version ID, version label/effective interval, source
+filename, chunk ID, page/section, rank, retrieval score, language, and a bounded source excerpt.
+The prompt requires factual claims to cite those keys and to state that evidence is insufficient
+when context does not support a claim. After generation, the validator resolves only emitted keys
+that exist in the supplied evidence set, rejects unknown or missing keys, and normalizes repeats.
+Evidence outside the resolved immutable version scope is rejected during citation construction.
+The API returns cited records by default and full evidence plus validation metadata only in debug
+mode. Excerpts are deterministic Unicode-safe prefixes of supplied source chunk text and are never
+LLM-generated. Citation validation proves key-to-evidence provenance, not semantic faithfulness;
+automatic claim/evidence verification remains future evaluation work.
 
 ### Evaluation
 

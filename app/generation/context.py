@@ -1,23 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
-from app.models.query import Citation
-from app.models.retrieval import DenseRetrievalCandidate
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceMetadata:
-    candidate: DenseRetrievalCandidate
-    document_title: str
-    version_label: str
-    filename: str
+from app.generation.citations import (
+    CitationFactory,
+    CitationRecord,
+    CitationSource,
+    citation_key_for_rank,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ContextEvidence:
-    citation: Citation
-    candidate: DenseRetrievalCandidate
+    citation: CitationRecord
+    source: CitationSource
     rendered_text: str
 
 
@@ -29,22 +26,33 @@ class BuiltContext:
 
 
 class EvidenceContextBuilder:
-    def __init__(self, max_characters: int) -> None:
+    def __init__(self, max_characters: int, excerpt_max_characters: int = 500) -> None:
         if max_characters < 1:
             raise ValueError("max_characters must be positive")
         self._max_characters = max_characters
+        self._citation_factory = CitationFactory(excerpt_max_characters)
 
-    def build(self, ranked_evidence: list[EvidenceMetadata]) -> BuiltContext:
+    def build(
+        self,
+        ranked_evidence: list[CitationSource],
+        *,
+        allowed_version_ids: set[UUID] | None = None,
+    ) -> BuiltContext:
         blocks: list[str] = []
         included: list[ContextEvidence] = []
         used = 0
         truncated = False
+        seen_chunk_ids: set[UUID] = set()
 
         for item in ranked_evidence:
+            if item.candidate.chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(item.candidate.chunk_id)
             text = item.candidate.text.strip()
             if not text:
                 continue
-            key = f"S{len(included) + 1}"
+            rank = len(included) + 1
+            key = citation_key_for_rank(rank)
             prefix = self._prefix(key, item)
             separator_size = 2 if blocks else 0
             available = self._max_characters - used - separator_size
@@ -57,25 +65,20 @@ class EvidenceContextBuilder:
             block = prefix + rendered_text
             blocks.append(block)
             used += separator_size + len(block)
-            citation = Citation(
-                citation_key=key,
-                logical_document_id=item.candidate.logical_document_id,
-                document_version_id=item.candidate.document_version_id,
-                version_label=item.version_label,
-                filename=item.filename,
-                chunk_id=item.candidate.chunk_id,
-                page=item.candidate.page,
-                section_path=item.candidate.section_path,
-                excerpt=rendered_text,
+            citation = self._citation_factory.create(
+                item,
+                rank=rank,
+                supplied_text=rendered_text,
+                allowed_version_ids=allowed_version_ids,
             )
-            included.append(ContextEvidence(citation, item.candidate, rendered_text))
+            included.append(ContextEvidence(citation, item, rendered_text))
             if truncated:
                 break
 
         return BuiltContext("\n\n".join(blocks), tuple(included), truncated)
 
     @staticmethod
-    def _prefix(key: str, item: EvidenceMetadata) -> str:
+    def _prefix(key: str, item: CitationSource) -> str:
         page = str(item.candidate.page) if item.candidate.page is not None else "not available"
         section = (
             " > ".join(item.candidate.section_path)
@@ -86,7 +89,7 @@ class EvidenceContextBuilder:
             f"[{key}]\n"
             f"Document: {item.document_title}\n"
             f"Version: {item.version_label} ({item.candidate.document_version_id})\n"
-            f"File: {item.filename}\n"
+            f"File: {item.source_filename}\n"
             f"Page: {page}\n"
             f"Section: {section}\n"
             "Evidence: "
