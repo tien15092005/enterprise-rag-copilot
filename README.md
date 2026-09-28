@@ -45,6 +45,36 @@ backend as a reproducible portfolio project:
 
 Authentication, tenant isolation, and full production operations remain explicitly out of scope.
 
+## Portfolio demo frontend
+
+The lightweight React/TypeScript frontend in `frontend/` demonstrates the completed backend; it
+does not reproduce retrieval, version resolution, comparison, citation, or agent logic in the
+browser. It provides overview, document/version catalog, Ask/RAG, version comparison, controlled
+agent, and evaluation/system views.
+
+Start the backend first using the local instructions below or Docker Compose. For local Vite
+development, allow its origin in the backend `.env`:
+
+```dotenv
+CORS_ALLOWED_ORIGINS=["http://localhost:5173"]
+```
+
+Then start the frontend:
+
+```powershell
+Set-Location frontend
+Copy-Item .env.example .env
+npm install
+npm run dev
+```
+
+`VITE_API_BASE_URL` is the single frontend backend-address setting and defaults to the documented
+`http://localhost:8000` value in `frontend/.env.example`. Open `http://localhost:5173`.
+
+For a populated comparison demo, manually create logical documents and upload the paired fixtures
+from `data/comparison/` through the Documents view, then index each version. This intentionally is
+not automatic so existing persistent development data is never mutated for presentation purposes.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
 
