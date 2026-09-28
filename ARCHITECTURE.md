@@ -5,8 +5,8 @@
 Enterprise Knowledge Copilot is a production-oriented, version-aware Retrieval-Augmented Generation (RAG) backend for internal enterprise documents. Its distinguishing capability is treating successive files such as `HR_Policy_2025.pdf` and `HR_Policy_2026.pdf` as immutable versions of one logical document. The system is designed to retrieve from an exact version or an intentional version scope, compare versions, explain changes, and cite evidence from both sides of a comparison.
 
 The implemented system supports English and Vietnamese PDF, DOCX, TXT, and Markdown ingestion;
-dense and hybrid retrieval; optional reranking; cited answers; reproducible evaluation; and
-deterministic two-version comparison. A small controlled tool-calling layer remains a later phase.
+dense and hybrid retrieval; optional reranking; cited answers; reproducible evaluation;
+deterministic two-version comparison; and a bounded controlled tool-calling layer.
 
 The initial deployment is a modular monolith. FastAPI exposes the REST API, while application services keep parsing, chunking, embedding, retrieval, reranking, generation, and evaluation separate. This preserves understandable source code and permits individual components to be replaced without introducing distributed-system complexity prematurely.
 
@@ -34,7 +34,7 @@ FastAPI application
     |
     |-- evaluation service --> retrieval and RAG evaluators --> JSON/CSV results
     |
-    +-- optional agent service --> small allow-listed tool registry
+    +-- agent service --> bounded loop --> small allow-listed application-tool registry
 
 Local document volume (initial file store) <--> document service
 ```
@@ -57,8 +57,12 @@ enterprise-rag-copilot/
 |   |       |-- comparisons.py
 |   |       |-- versions.py
 |   |       `-- query.py
-|   |-- agents/
-|   |   |-- orchestrator.py
+|   |-- agent/
+|   |   |-- errors.py
+|   |   |-- models.py
+|   |   |-- prompts.py
+|   |   |-- provider.py
+|   |   |-- service.py
 |   |   `-- tools.py
 |   |-- core/
 |   |   |-- config.py
@@ -324,14 +328,26 @@ not decide the change types.
 
 ### Controlled agent layer
 
-The agent layer is added only after the direct RAG pipeline works. It uses a small allow-list of typed tools:
+The agent layer sits above, and never replaces, the direct RAG and comparison APIs. It uses this
+small allowlist of typed application tools:
 
-- `search_knowledge_base`
-- `get_document_metadata`
-- `summarize_document`
-- `compare_documents`
+- `search_knowledge`
+- `compare_versions`
+- `list_document_versions`
+- `get_document_version`
 
-The orchestrator limits tool names, argument schemas, call count, and time budget. Version-aware arguments are typed, and `compare_documents` requires two explicit version IDs. Tools call the same application services as REST endpoints; the comparison application service exists before the agent exposes it. Direct `/query` remains the primary path and does not depend on the agent.
+The orchestrator validates tool names and Pydantic argument schemas, constrains calls to the request
+logical document, and limits tool steps
+to a configurable ceiling. Search accepts the same current/exact/all/as-of selector and retrieval
+mode as `/query`; comparison requires two explicit versions and calls the Phase 9A service. Document
+tools expose safe metadata rather than source bytes or storage keys.
+
+The provider sees structured tool definitions and results, but it cannot access shell, filesystem,
+SQL, network, or unknown-tool capabilities. Every tool executes an existing service. Citation keys
+from tool outputs are normalized into a response-local set and the final answer is validated against
+that authoritative evidence. Unknown or missing keys fail closed. Insufficient-evidence tool output
+permits a citation-free refusal. Debug traces contain sanitized arguments and timing only, never
+chain-of-thought. Direct `/query` and `/compare` remain independent of the agent.
 
 ### Observability
 

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
 
+from app.agent.provider import (
+    AgentDecision,
+    AgentMessage,
+    AgentToolCall,
+    AgentToolDefinition,
+)
 from app.generation.errors import LLMProviderError
 from app.generation.providers.base import LLMRequest, LLMResponse, LLMTokenUsage
+from app.models.query import TokenUsage
 
 
 class OpenAICompatibleProvider:
@@ -65,6 +73,74 @@ class OpenAICompatibleProvider:
                 provider=self.provider_name,
             ) from exc
 
+    async def decide(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[AgentMessage],
+        tools: list[AgentToolDefinition],
+        temperature: float,
+        max_output_tokens: int,
+    ) -> AgentDecision:
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        *[_openai_message(message) for message in messages],
+                    ],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": tool.name,
+                                "description": tool.description,
+                                "parameters": tool.parameters,
+                            },
+                        }
+                        for tool in tools
+                    ],
+                    "tool_choice": "auto",
+                    "temperature": temperature,
+                    "max_tokens": max_output_tokens,
+                },
+            )
+            response.raise_for_status()
+            payload: dict[str, Any] = response.json()
+            message = payload["choices"][0]["message"]
+            usage = payload.get("usage") or {}
+            token_usage = TokenUsage(
+                prompt_tokens=_optional_int(usage.get("prompt_tokens")),
+                completion_tokens=_optional_int(usage.get("completion_tokens")),
+                total_tokens=_optional_int(usage.get("total_tokens")),
+            )
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                call = tool_calls[0]
+                function = call["function"]
+                arguments = json.loads(function.get("arguments") or "{}")
+                if not isinstance(arguments, dict):
+                    raise TypeError("tool arguments must be an object")
+                return AgentDecision(
+                    tool_call=AgentToolCall(
+                        call_id=str(call.get("id") or "tool-call"),
+                        name=str(function["name"]),
+                        arguments=arguments,
+                    ),
+                    token_usage=token_usage,
+                )
+            return AgentDecision(
+                final_answer=str(message.get("content") or "").strip(),
+                token_usage=token_usage,
+            )
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            raise LLMProviderError(
+                "OpenAI-compatible agent request failed", provider=self.provider_name
+            ) from exc
+
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
@@ -72,3 +148,25 @@ class OpenAICompatibleProvider:
 
 def _optional_int(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _openai_message(message: AgentMessage) -> dict[str, Any]:
+    if message.role == "assistant" and message.tool_name and message.tool_call_id:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": message.tool_call_id,
+                    "type": "function",
+                    "function": {"name": message.tool_name, "arguments": message.content},
+                }
+            ],
+        }
+    if message.role == "tool":
+        return {
+            "role": "tool",
+            "tool_call_id": message.tool_call_id,
+            "content": message.content,
+        }
+    return {"role": message.role, "content": message.content}

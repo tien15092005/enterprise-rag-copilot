@@ -6,8 +6,8 @@ versions of the same logical document.
 
 ## Current status
 
-Phase 9A adds deterministic bilingual comparison of two explicit immutable versions on top of the
-evaluated, version-aware RAG pipeline:
+Phase 9B adds a bounded, allowlisted orchestration layer on top of the evaluated version-aware RAG
+and comparison services:
 
 - Immutable document-version records grouped under stable logical documents.
 - Local filesystem source storage behind a replaceable storage protocol.
@@ -38,8 +38,10 @@ evaluated, version-aware RAG pipeline:
 - Reproducible JSON/CSV experiment artifacts and a generated Markdown report.
 - First-class English/Vietnamese comparison with deterministic section alignment and change types.
 - Optional, citation-validated LLM summaries over structured comparison evidence.
+- A controlled English/Vietnamese agent that can call only four typed application tools.
+- A configurable tool-step ceiling, final citation validation, and safe debug tool traces.
 
-Agent orchestration and production hardening are intentionally not implemented yet.
+Production hardening is intentionally not implemented yet.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
@@ -80,6 +82,7 @@ The application exposes:
 - `POST /api/query` for version-scoped RAG answering with structured citations.
 - `POST /api/compare` for deterministic comparison of two explicit versions of one logical
   document, with an optional generated summary.
+- `POST /api/agent` for bounded orchestration over the approved internal tools.
 - `GET /docs` for generated OpenAPI documentation.
 
 ## Ingestion architecture
@@ -352,6 +355,40 @@ comparison metrics; sentence splitting is intentionally lightweight; moved or he
 sections may remain added/removed; there is no automatic claim/evidence entailment verifier; and
 the generated-summary prompt cannot replace deterministic change classification.
 
+## Controlled agent orchestration
+
+The Phase 9B agent is an orchestration layer, not a second retrieval or comparison implementation.
+It can invoke only `search_knowledge`, `compare_versions`, `list_document_versions`, and
+`get_document_version`. Those tools delegate to the existing RAG, comparison, and document services,
+so version resolution, Qdrant/PostgreSQL retrieval, RRF, reranking, citations, comparison alignment,
+and provenance validation remain in their original deterministic owners.
+
+The provider selects a typed tool call, Pydantic validates its arguments, and the registry enforces
+the request's logical-document scope. Tool results are returned to the provider as structured JSON.
+Citation keys from multiple calls are deterministically re-keyed into one response-local evidence
+set, and the final answer is rejected if it references an unknown key or omits citations despite
+having evidence. Current/exact/all/as-of semantics are expressed through the existing version
+selector; filenames and upload order never resolve versions.
+
+The loop permits at most `AGENT_MAX_TOOL_STEPS` calls (default 4). A request may lower but cannot
+raise that ceiling. Debug mode returns only tool name, sanitized arguments, result type, step number,
+and latency—never hidden reasoning. The agent cannot execute shell commands, access arbitrary files,
+generate SQL, browse the public web, call arbitrary HTTP endpoints, invoke unknown tools, or exceed
+the step limit. OpenAI-compatible and Ollama adapters support structured tool calls; deterministic
+tests and verification use a controlled fake and require no paid provider or model download.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/agent `
+  -ContentType application/json `
+  -Body (@{
+    message = "What is the current remote-work policy?"
+    logical_document_id = $document.logical_document_id
+    retrieval_mode = "hybrid"
+    max_tool_steps = 3
+    debug = $true
+  } | ConvertTo-Json)
+```
+
 ## Migrations
 
 ```powershell
@@ -434,4 +471,6 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
   is deferred.
 - Comparison alignment has not yet been evaluated on a broad external corpus, and semantic
   fallback thresholds may require domain-specific tuning.
-- Agents and production hardening are not implemented.
+- Agent routing quality depends on the configured tool-calling model; deterministic validation
+  constrains execution but does not guarantee that the model chooses the best approved tool.
+- Production hardening is not implemented.

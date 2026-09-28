@@ -6,6 +6,10 @@ from typing import cast
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.errors import AgentProviderUnavailableError
+from app.agent.provider import AgentProvider
+from app.agent.service import AgentService
+from app.agent.tools import AgentToolRegistry
 from app.comparison.service import DocumentComparisonService
 from app.core.config import Settings
 from app.db.session import Database
@@ -178,4 +182,57 @@ async def get_comparison_service(
             embeddings=get_embedding_provider(request),
             llm=cast(LLMProvider | None, request.app.state.llm_provider),
             settings=get_request_settings(request),
+        )
+
+
+async def get_agent_service(request: Request) -> AsyncIterator[AgentService]:
+    provider = cast(LLMProvider | None, request.app.state.llm_provider)
+    if provider is None or not isinstance(provider, AgentProvider):
+        raise AgentProviderUnavailableError()
+    database = get_database(request)
+    settings = get_request_settings(request)
+    async for session in database.session():
+        dense = DenseRetrievalService(
+            session, get_embedding_provider(request), get_vector_store(request)
+        )
+        hybrid = HybridRetrievalService(
+            dense,
+            LexicalRetrievalService(session),
+            dense_candidate_limit=settings.dense_candidate_limit,
+            lexical_candidate_limit=settings.lexical_candidate_limit,
+            rrf_k=settings.rrf_k,
+        )
+        reranked = RerankedRetrievalService(
+            hybrid,
+            get_reranker(request),
+            candidate_limit=settings.rerank_candidate_limit,
+            final_top_k=settings.rerank_final_top_k,
+        )
+        rag = RagAnswerService(
+            session=session,
+            scope_resolver=VersionScopeResolver(session),
+            retrieval=ModeAwareRetrievalService(dense, hybrid, reranked),
+            context_builder=EvidenceContextBuilder(
+                settings.rag_max_context_characters,
+                settings.citation_excerpt_max_characters,
+            ),
+            llm=provider,
+            settings=settings,
+        )
+        comparison = DocumentComparisonService(
+            session=session,
+            embeddings=get_embedding_provider(request),
+            llm=provider,
+            settings=settings,
+        )
+        ingestion = IngestionService(
+            session,
+            get_storage(request),
+            get_parser_registry(request),
+            get_chunker(request),
+        )
+        yield AgentService(
+            provider,
+            AgentToolRegistry(rag, comparison, ingestion),
+            settings,
         )

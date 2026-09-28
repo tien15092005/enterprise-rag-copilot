@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     comparison_content_similarity_threshold: float = Field(default=0.6, ge=0, le=1)
     comparison_semantic_similarity_threshold: float = Field(default=0.95, ge=-1, le=1)
     comparison_max_sections: int = Field(default=100, ge=1, le=1000)
+    agent_max_tool_steps: int = Field(default=4, ge=1, le=10)
 
     @model_validator(mode="after")
     def validate_reranking_limits(self) -> Settings:

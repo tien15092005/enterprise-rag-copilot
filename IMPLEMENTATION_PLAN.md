@@ -365,15 +365,21 @@ python -m mypy app
 
 ## Phase 9B - Controlled agent tools
 
+Status: implemented. A bounded provider-neutral orchestration loop validates calls against four
+typed tools, delegates to existing application services, preserves version/citation provenance,
+enforces a configurable step ceiling, and exposes only sanitized execution traces.
+
 ### Objective
 
 Add a minimal typed tool registry and single-agent orchestration layer over existing retrieval, metadata, summarization, and comparison application services. Limit tool access, calls, and execution time. Keep direct RAG and comparison APIs independent.
 
 ### Files/modules affected
 
-- `app/agents/tools.py`, `orchestrator.py`
+- `app/agent/models.py`, `provider.py`, `tools.py`, `service.py`, `prompts.py`, `errors.py`
 - Agent/tool request and response schemas
-- `tests/agents/`
+- `app/api/routes/agent.py`
+- `tests/agent/`, `tests/api/test_agent.py`
+- `scripts/verify_agent.py`
 
 ### Test criteria
 
@@ -388,9 +394,10 @@ Add a minimal typed tool registry and single-agent orchestration layer over exis
 ### Verification commands
 
 ```powershell
-python -m pytest tests/agents
+python -m pytest tests/agent tests/api/test_agent.py
 python -m pytest -k "agent or tool"
-python -m ruff check app tests
+python scripts/verify_agent.py
+python -m ruff check app tests scripts
 python -m mypy app
 ```
 
