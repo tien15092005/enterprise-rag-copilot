@@ -1,0 +1,16 @@
+# Runtime dependency snapshot used by the production-style Docker build.
+# Refresh deliberately after running the full verification suite.
+alembic==1.20.0
+asyncpg==0.31.0
+fastapi==0.141.1
+httpx==0.28.1
+pydantic-settings==2.15.0
+pypdf==6.19.0
+python-docx==1.2.0
+python-multipart==0.0.32
+qdrant-client==1.13.3
+sentence-transformers==5.7.0
+sqlalchemy==2.1.1
+torch==2.14.0
+transformers==5.17.0
+uvicorn==0.54.0

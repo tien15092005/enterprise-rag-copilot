@@ -27,7 +27,9 @@ from app.models.query import (
 )
 from app.models.retrieval import (
     HybridRetrievalBatch,
+    HybridRetrievalCandidate,
     RerankedRetrievalBatch,
+    RerankedRetrievalCandidate,
     RetrievalBatch,
     RetrievalCandidate,
 )
@@ -80,6 +82,7 @@ class RagAnswerService:
         retrieved_candidates: list[RetrievalCandidate] = [
             candidate for candidate in retrieval_result.candidates
         ]
+        retrieved_candidates = self._reject_low_evidence(retrieved_candidates)
         evidence_metadata = await self._hydrate_evidence(retrieved_candidates)
         context_started = perf_counter()
         context = self._context_builder.build(
@@ -199,6 +202,35 @@ class RagAnswerService:
             for candidate in candidates
             if candidate.document_version_id in by_id and candidate.text.strip()
         ]
+
+    def _reject_low_evidence(
+        self, candidates: list[RetrievalCandidate]
+    ) -> list[RetrievalCandidate]:
+        """Apply optional, explicitly experimental mode-specific score floors."""
+
+        accepted: list[RetrievalCandidate] = []
+        for candidate in candidates:
+            if isinstance(candidate, RerankedRetrievalCandidate):
+                threshold = self._settings.evidence_min_reranker_score
+                score = candidate.reranker_score
+            elif isinstance(candidate, HybridRetrievalCandidate):
+                threshold = self._settings.evidence_min_rrf_score
+                score = candidate.rrf_score
+            else:
+                threshold = self._settings.evidence_min_dense_score
+                score = candidate.score
+            if threshold is None or score >= threshold:
+                accepted.append(candidate)
+        if len(accepted) != len(candidates):
+            logger.info(
+                "experimental evidence score floor rejected candidates",
+                extra={
+                    "event": "evidence_candidates_rejected",
+                    "retrieved_count": len(candidates),
+                    "accepted_count": len(accepted),
+                },
+            )
+        return accepted
 
     @staticmethod
     def _debug(context: BuiltContext, validation: CitationValidationResult) -> QueryDebug:

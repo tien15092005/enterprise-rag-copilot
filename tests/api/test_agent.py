@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
+from app.agent.errors import AgentTimeoutError
 from app.agent.models import AgentRequest, AgentResponse, AgentTiming
 from app.api.dependencies import get_agent_service
 
@@ -27,6 +28,12 @@ class FakeAgentService:
             ),
             token_usage=None,
         )
+
+
+class TimedOutAgentService:
+    async def run(self, request: AgentRequest) -> AgentResponse:
+        del request
+        raise AgentTimeoutError(0.01)
 
 
 @pytest.mark.asyncio
@@ -60,3 +67,18 @@ async def test_agent_api_validates_request(app: FastAPI, client: AsyncClient) ->
 
     assert missing.status_code == 422
     assert too_many.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_agent_api_serializes_timeout_error(app: FastAPI, client: AsyncClient) -> None:
+    app.dependency_overrides[get_agent_service] = lambda: TimedOutAgentService()
+
+    response = await client.post("/api/agent", json={"message": "question"})
+
+    assert response.status_code == 504
+    assert response.json()["error"] == {
+        "code": "agent_timeout",
+        "message": "agent execution exceeded the configured deadline",
+        "details": {"timeout_seconds": 0.01},
+        "request_id": response.headers["X-Request-ID"],
+    }

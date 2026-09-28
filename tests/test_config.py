@@ -25,3 +25,21 @@ def test_settings_reject_invalid_port() -> None:
 def test_settings_reject_final_top_k_above_rerank_pool() -> None:
     with pytest.raises(ValidationError):
         Settings(rerank_candidate_limit=3, rerank_final_top_k=4)
+
+
+def test_production_rejects_placeholder_credentials_and_wildcard_cors() -> None:
+    with pytest.raises(ValidationError, match="placeholder credentials"):
+        Settings(app_env="production")
+    with pytest.raises(ValidationError, match="must not contain"):
+        Settings(
+            app_env="production",
+            database_url="postgresql+asyncpg://service:secure@db/service",
+            cors_allowed_origins=["*"],
+        )
+
+
+def test_chunk_defaults_and_agent_deadline_are_validated() -> None:
+    with pytest.raises(ValidationError, match="CHUNK_OVERLAP"):
+        Settings(chunk_size=10, chunk_overlap=10)
+    with pytest.raises(ValidationError):
+        Settings(agent_timeout_seconds=0)

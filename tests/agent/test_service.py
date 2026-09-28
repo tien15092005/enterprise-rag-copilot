@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
-from app.agent.errors import AgentStepLimitError
+from app.agent.errors import AgentStepLimitError, AgentTimeoutError
 from app.agent.models import AgentRequest, AgentToolResult
 from app.agent.provider import (
     AgentDecision,
@@ -229,3 +230,31 @@ async def test_unknown_final_citation_is_rejected(settings: Settings) -> None:
         await AgentService(provider, registry, settings).run(  # type: ignore[arg-type]
             AgentRequest(message="question", logical_document_id=uuid4())
         )
+
+
+@pytest.mark.asyncio
+async def test_whole_agent_deadline_is_structured(settings: Settings) -> None:
+    class SlowProvider(ScriptedProvider):
+        async def decide(
+            self,
+            *,
+            system_prompt: str,
+            messages: list[AgentMessage],
+            tools: list[AgentToolDefinition],
+            temperature: float,
+            max_output_tokens: int,
+        ) -> AgentDecision:
+            await asyncio.sleep(0.05)
+            return final("late")
+
+    limited = settings.model_copy(update={"agent_timeout_seconds": 0.01})
+    provider = SlowProvider([])
+    registry = RecordingRegistry({})
+
+    with pytest.raises(AgentTimeoutError) as exc_info:
+        await AgentService(provider, registry, limited).run(  # type: ignore[arg-type]
+            AgentRequest(message="timeout")
+        )
+
+    assert exc_info.value.code == "agent_timeout"
+    assert exc_info.value.status_code == 504

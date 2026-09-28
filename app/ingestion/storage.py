@@ -64,7 +64,7 @@ class LocalFilesystemStorage:
         document_version_id: UUID,
         original_filename: str,
     ) -> StoredObject:
-        display_name = Path(original_filename).name
+        display_name = PurePosixPath(original_filename.replace("\\", "/")).name
         sanitized = _SAFE_FILENAME.sub("_", display_name).strip("._") or "document"
         storage_key = str(PurePosixPath("versions", str(document_version_id), sanitized))
         target = self._resolve_key(storage_key)

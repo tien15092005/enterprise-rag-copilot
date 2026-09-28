@@ -28,4 +28,5 @@ Thumbs.db
 data/uploads/
 data/model_cache/
 data/evaluation/results/
+data/runtime/
 logs/

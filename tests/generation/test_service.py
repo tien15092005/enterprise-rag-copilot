@@ -327,6 +327,28 @@ async def test_zero_evidence_refuses_without_calling_llm(app: Any, settings: Set
 
 
 @pytest.mark.asyncio
+async def test_experimental_dense_score_floor_rejects_low_evidence(
+    app: Any, settings: Settings
+) -> None:
+    database: Database = app.state.database
+    logical_document_id, version = await ready_scope(database)
+    retrieval = FakeRetrieval([make_candidate(version, "Nearest but untrusted evidence")])
+    llm = FakeLLM("must not be used")
+    experimental = settings.model_copy(update={"evidence_min_dense_score": 0.95})
+    service, session = await build_service(database, retrieval, llm, experimental)
+    try:
+        result = await service.answer(
+            QueryRequest(question="Unsupported question", logical_document_id=logical_document_id)
+        )
+    finally:
+        await session.close()
+
+    assert result.insufficient_evidence is True
+    assert result.citations == []
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
 async def test_retrieval_only_succeeds_without_llm(app: Any, settings: Settings) -> None:
     database: Database = app.state.database
     logical_document_id, version = await ready_scope(database)

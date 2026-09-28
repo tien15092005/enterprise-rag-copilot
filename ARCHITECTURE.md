@@ -353,6 +353,10 @@ chain-of-thought. Direct `/query` and `/compare` remain independent of the agent
 
 Structured JSON logs include request/correlation ID, operation, document or query identifiers where safe, duration, provider/model, candidate counts, and outcome. Timers cover parsing, chunking, embedding, dense retrieval, lexical retrieval, fusion, reranking, LLM generation, and total request latency. Provider token usage is logged and returned to internal metrics only when supplied by the provider. Raw document text, prompts, API keys, and full user queries are not logged by default.
 
+The agent is bounded by both a tool-step ceiling and a whole-run deadline. Its debug trace contains
+only tool names, sanitized arguments, result types, and durations. Timeout, unknown-tool, malformed
+argument, and step-limit failures use stable structured application errors.
+
 ## 5. Core interfaces
 
 The exact Python types will be refined during implementation, while these boundaries should remain stable.
@@ -516,6 +520,17 @@ Configuration groups include:
 - Debug response policy and evaluation result path.
 
 Production hardening such as authentication, authorization, malware scanning, tenant isolation, rate limiting, and secret management is intentionally documented as required future work rather than falsely implied by the portfolio baseline.
+
+Phase 10 adds portfolio-level runtime controls without claiming full production operations: a
+non-root/read-only application container, CPU-only PyTorch wheel resolution, configurable bind
+mounts, bounded-retry migration-on-start, opt-in CORS, placeholder-secret rejection in production, bounded upload
+storage, and deterministic E2E coverage. All data/cache paths remain configurable and portable;
+placing the clone on `D:` is a developer choice rather than an application requirement.
+
+Optional evidence rejection uses three separate mode-specific score floors (dense, RRF, reranker).
+All are disabled by default because Phase 8's small dataset does not calibrate a safe threshold and
+the score families are not comparable. Enabling one is an explicit experiment, not a production
+quality guarantee.
 
 ## 9. Consistency, failure handling, and reproducibility
 

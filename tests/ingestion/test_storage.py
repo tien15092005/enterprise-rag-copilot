@@ -19,3 +19,16 @@ async def test_local_storage_calculates_checksum_and_controls_path(tmp_path: Pat
     assert stored.checksum == hashlib.sha256(b"same bytes").hexdigest()
     assert ".." not in stored.storage_key
     assert await storage.read(stored.storage_key) == b"same bytes"
+
+
+async def test_windows_style_client_path_is_reduced_to_a_filename(tmp_path: Path) -> None:
+    storage = LocalFilesystemStorage(tmp_path / "uploads", max_bytes=1024)
+
+    stored = await storage.save(
+        BytesIO(b"safe"),
+        document_version_id=uuid4(),
+        original_filename=r"C:\Users\person\policy.md",
+    )
+
+    assert stored.original_filename == "policy.md"
+    assert stored.storage_key.endswith("/policy.md")

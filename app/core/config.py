@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_json: bool = True
+    cors_allowed_origins: list[str] = Field(default_factory=list)
 
     database_url: str = (
         "postgresql+asyncpg://knowledge_copilot:change-me@localhost:5432/knowledge_copilot"
@@ -64,6 +65,9 @@ class Settings(BaseSettings):
     dense_candidate_limit: int = Field(default=20, ge=1, le=100)
     lexical_candidate_limit: int = Field(default=20, ge=1, le=100)
     rrf_k: int = Field(default=60, ge=1, le=1000)
+    evidence_min_dense_score: float | None = None
+    evidence_min_rrf_score: float | None = None
+    evidence_min_reranker_score: float | None = None
     reranker_provider: Literal["cross_encoder"] = "cross_encoder"
     reranker_model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     reranker_model_revision: str = "1427fd652930e4ba29e8149678df786c240d8825"
@@ -77,11 +81,24 @@ class Settings(BaseSettings):
     comparison_semantic_similarity_threshold: float = Field(default=0.95, ge=-1, le=1)
     comparison_max_sections: int = Field(default=100, ge=1, le=1000)
     agent_max_tool_steps: int = Field(default=4, ge=1, le=10)
+    agent_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def validate_cors_origins(cls, value: list[str]) -> list[str]:
+        return [origin.rstrip("/") for origin in value if origin.strip()]
 
     @model_validator(mode="after")
     def validate_reranking_limits(self) -> Settings:
         if self.rerank_final_top_k > self.rerank_candidate_limit:
             raise ValueError("RERANK_FINAL_TOP_K cannot exceed RERANK_CANDIDATE_LIMIT")
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("CHUNK_OVERLAP cannot equal or exceed CHUNK_SIZE")
+        if self.app_env == "production":
+            if "change-me" in self.database_url:
+                raise ValueError("production DATABASE_URL must not use placeholder credentials")
+            if "*" in self.cors_allowed_origins:
+                raise ValueError("production CORS_ALLOWED_ORIGINS must not contain '*'")
         return self
 
 

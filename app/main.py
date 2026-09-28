@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.error_handlers import register_error_handlers
@@ -70,6 +71,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.llm_provider = llm_provider
     application.state.reranker = reranker
     application.state.vector_store = vector_store
+    if app_settings.cors_allowed_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=app_settings.cors_allowed_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        )
     application.add_middleware(RequestContextMiddleware)
     register_error_handlers(application)
     application.include_router(health_router)

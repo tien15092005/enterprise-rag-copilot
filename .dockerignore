@@ -8,4 +8,8 @@ __pycache__
 .env
 data/uploads
 data/evaluation/results
-
+data/model_cache
+data/runtime
+logs
+.coverage
+htmlcov

@@ -8,6 +8,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-knowledge_copilot}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-knowledge_copilot}
       QDRANT_URL: http://qdrant:6333
+      UPLOAD_DIRECTORY: /app/data/uploads
+      EMBEDDING_CACHE_DIRECTORY: /app/data/model_cache
+      RERANKER_CACHE_DIRECTORY: /app/data/model_cache
+      HF_HOME: /app/data/model_cache
+      MIGRATION_MAX_ATTEMPTS: ${MIGRATION_MAX_ATTEMPTS:-10}
+      MIGRATION_RETRY_SECONDS: ${MIGRATION_RETRY_SECONDS:-2}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -15,6 +21,15 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+    volumes:
+      - "${DOCKER_UPLOAD_PATH:-./data/runtime/uploads}:/app/data/uploads"
+      - "${DOCKER_MODEL_CACHE_PATH:-./data/model_cache}:/app/data/model_cache"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test:
         - CMD
@@ -35,7 +50,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - "${POSTGRES_DATA_PATH:-./data/runtime/postgres}:/var/lib/postgresql/data"
     healthcheck:
       test:
         - CMD-SHELL
@@ -50,7 +65,7 @@ services:
       - "${QDRANT_HTTP_PORT:-6333}:6333"
       - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - "${QDRANT_DATA_PATH:-./data/runtime/qdrant}:/qdrant/storage"
     healthcheck:
       test:
         - CMD
@@ -60,8 +75,3 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-volumes:
-  postgres_data:
-  qdrant_data:
-

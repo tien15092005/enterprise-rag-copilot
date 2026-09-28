@@ -403,6 +403,11 @@ python -m mypy app
 
 ## Phase 10 - Docker, tests, and documentation hardening
 
+Status: implemented. The runtime uses a CPU-oriented multi-stage image, configurable bind-mounted
+state, migration-on-startup, non-root/read-only container controls, fail-fast production settings,
+an agent deadline, disabled-by-default evidence score floors, deterministic full-workflow E2E
+coverage, and portfolio-ready operational documentation.
+
 ### Objective
 
 Finish reproducible containers, migrations/startup behavior, full test coverage, security and failure-path checks, end-to-end smoke tests, and interview-quality documentation. Report only measured experiment results produced by Phase 8.

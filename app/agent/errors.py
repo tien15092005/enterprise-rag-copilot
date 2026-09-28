@@ -46,6 +46,16 @@ class AgentStepLimitError(AgentError):
         )
 
 
+class AgentTimeoutError(AgentError):
+    def __init__(self, timeout_seconds: float) -> None:
+        super().__init__(
+            "agent execution exceeded the configured deadline",
+            code="agent_timeout",
+            status_code=504,
+            details={"timeout_seconds": timeout_seconds},
+        )
+
+
 class AgentProviderUnavailableError(AgentError):
     def __init__(self) -> None:
         super().__init__(

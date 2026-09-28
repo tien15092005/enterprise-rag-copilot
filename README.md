@@ -6,8 +6,8 @@ versions of the same logical document.
 
 ## Current status
 
-Phase 9B adds a bounded, allowlisted orchestration layer on top of the evaluated version-aware RAG
-and comparison services:
+Phase 10 packages and hardens the completed version-aware RAG, comparison, and controlled-agent
+backend as a reproducible portfolio project:
 
 - Immutable document-version records grouped under stable logical documents.
 - Local filesystem source storage behind a replaceable storage protocol.
@@ -39,9 +39,11 @@ and comparison services:
 - First-class English/Vietnamese comparison with deterministic section alignment and change types.
 - Optional, citation-validated LLM summaries over structured comparison evidence.
 - A controlled English/Vietnamese agent that can call only four typed application tools.
-- A configurable tool-step ceiling, final citation validation, and safe debug tool traces.
+- Configurable tool-step and wall-clock limits, final citation validation, and safe debug traces.
+- CPU-oriented multi-stage Docker packaging and portable configurable data/cache mounts.
+- Portfolio-level upload, path, CORS, production-configuration, and container hardening.
 
-Production hardening is intentionally not implemented yet.
+Authentication, tenant isolation, and full production operations remain explicitly out of scope.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
 approved design and phased delivery plan.
@@ -65,6 +67,34 @@ Run the schema migration before starting the API:
 .venv\Scripts\python -m alembic upgrade head
 .venv\Scripts\python -m uvicorn app.main:app --reload
 ```
+
+All runtime paths are configurable. Relative defaults such as `data/model_cache` work on Linux,
+macOS, and Windows; this repository does not require a `D:` drive. The original development setup
+keeps large artifacts on `D:` only because the clone itself is located there.
+
+## Docker startup
+
+Copy `.env.example` to `.env`, replace `POSTGRES_PASSWORD`, then start the complete stack:
+
+```powershell
+docker compose up --build
+```
+
+The backend waits for healthy PostgreSQL and Qdrant, applies Alembic migrations with a bounded
+startup retry, and starts as a non-root user with a read-only root filesystem. PostgreSQL, Qdrant,
+uploads, and model cache use
+configurable bind mounts:
+
+- `POSTGRES_DATA_PATH` (default `./data/runtime/postgres`)
+- `QDRANT_DATA_PATH` (default `./data/runtime/qdrant`)
+- `DOCKER_UPLOAD_PATH` (default `./data/runtime/uploads`)
+- `DOCKER_MODEL_CACHE_PATH` (default `./data/model_cache`)
+
+Change these paths in `.env` for another host. The Docker builder installs pinned
+`TORCH_VERSION=2.14.0` from PyTorch's CPU-only wheel index before resolving the bounded Python
+dependencies; embedding and reranking remain fully functional without CUDA runtime packages.
+Direct runtime versions are snapshotted in `requirements/docker-constraints.txt`; local editable
+development continues to use the compatible ranges in `pyproject.toml`.
 
 The application exposes:
 
@@ -139,6 +169,16 @@ ready DocumentVersion -> PostgreSQL chunks -> passage embeddings
 query + explicit document_version_id -> query embedding
   -> Qdrant cosine search with mandatory version filter
   -> PostgreSQL chunk hydration and provenance validation -> ranked candidates
+```
+
+Overall data flow:
+
+```text
+upload -> parse/chunk -> PostgreSQL -> embeddings/Qdrant
+       -> dense/lexical/RRF/optional rerank -> citations -> LLM response
+
+user request -> controlled agent -> typed allowlisted tools
+             -> deterministic query/comparison/catalog services -> grounded response
 ```
 
 PostgreSQL is authoritative for source snapshots, chunks, text, lifecycle state, and provenance.
@@ -227,7 +267,8 @@ rejects any evidence whose immutable version is outside the resolved scope.
 Questions containing Vietnamese orthographic markers are answered in Vietnamese; other questions
 default to English. Source excerpts remain in their original language. If retrieval produces no
 usable evidence, the service returns a deterministic language-appropriate insufficient-evidence
-response without calling the LLM. No unvalidated similarity threshold is used in this phase.
+response without calling the LLM. Optional mode-specific score floors are disabled by default;
+when explicitly enabled, they are experimental controls rather than calibrated quality guarantees.
 
 Set `retrieval_only` to `true` on `/api/query` to resolve any supported version selector and return
 the bounded evidence in `citations` without calling an LLM. In this mode `answer` is `null`,
@@ -371,7 +412,8 @@ having evidence. Current/exact/all/as-of semantics are expressed through the exi
 selector; filenames and upload order never resolve versions.
 
 The loop permits at most `AGENT_MAX_TOOL_STEPS` calls (default 4). A request may lower but cannot
-raise that ceiling. Debug mode returns only tool name, sanitized arguments, result type, step number,
+raise that ceiling. `AGENT_TIMEOUT_SECONDS` (default 30) also bounds the whole orchestration run and
+returns a structured `agent_timeout` error. Debug mode returns only tool name, sanitized arguments, result type, step number,
 and latency—never hidden reasoning. The agent cannot execute shell commands, access arbitrary files,
 generate SQL, browse the public web, call arbitrary HTTP endpoints, invoke unknown tools, or exceed
 the step limit. OpenAI-compatible and Ollama adapters support structured tool calls; deterministic
@@ -413,7 +455,9 @@ for ORM writes.
 .venv\Scripts\python -m ruff check app tests scripts
 .venv\Scripts\python -m mypy app
 .venv\Scripts\python -m pytest
+.venv\Scripts\python -m pytest tests/e2e -m e2e
 docker compose config
+docker compose build app
 ```
 
 ## Reproducible evaluation
@@ -442,6 +486,67 @@ drive and intentionally ignored by Git. The latest executed results are summariz
 modes, with opposite English/Vietnamese reranker effects, so dense remains the compatibility
 default. These measurements are engineering evidence for this dataset, not a general benchmark
 claim.
+
+### Measured benchmark summary
+
+On the current 14-query repository-owned engineering dataset:
+
+| Mode | Combined MRR | Hit@3 | Hit@5 | Version leakage |
+|---|---:|---:|---:|---:|
+| Dense | 0.958 | 1.000 | 1.000 | 0 |
+| Hybrid | 0.958 | 1.000 | 1.000 | 0 |
+| Hybrid + reranking | 0.958 | 1.000 | 1.000 | 0 |
+
+Dense remains the default because this small dataset provides no combined-MRR evidence for changing
+it. These results do not establish that any mode is universally better or worse.
+
+## Security and operational boundaries
+
+- Uploads are restricted to PDF, DOCX, UTF-8 TXT, and Markdown and bounded by
+  `MAX_UPLOAD_BYTES` (25 MiB by default).
+- Client paths are reduced to a filename, storage keys are opaque, and resolved paths are checked
+  against the configured upload root.
+- CORS is disabled by default. Configure a JSON list in `CORS_ALLOWED_ORIGINS`; production rejects
+  wildcard origins and placeholder database credentials.
+- Logs include identifiers, outcomes, counts, and timings but not source documents, prompts,
+  secrets, or full agent questions.
+- The agent has no shell, filesystem, SQL, public-web, or generic HTTP tool.
+- Authentication, authorization, tenant isolation, malware scanning, rate limiting, and external
+  secret management are not implemented and are required before real multi-user deployment.
+
+Experimental evidence score floors are available as `EVIDENCE_MIN_DENSE_SCORE`,
+`EVIDENCE_MIN_RRF_SCORE`, and `EVIDENCE_MIN_RERANKER_SCORE`. They are disabled by default. The score
+families are not interchangeable, and no threshold is claimed to be calibrated; calibration needs a
+larger domain dataset.
+
+## Repository structure
+
+```text
+app/                  FastAPI application and domain services
+  agent/              bounded orchestration and typed tool registry
+  comparison/         deterministic two-version alignment and diffs
+  evaluation/         datasets, metrics, and experiment runner
+  generation/         context, citations, prompts, and LLM providers
+  ingestion/          storage, parsing, chunking, and catalog services
+  retrieval/          dense, lexical, RRF, scope resolution, reranking integration
+data/                 committed samples/evaluation fixtures; ignored runtime data
+scripts/              reproducible evaluation and live verification commands
+tests/                unit, API, integration, and deterministic E2E coverage
+```
+
+## Safe cleanup
+
+Stop services before cleanup. These commands remove only ignored project runtime artifacts; database
+and Qdrant directories contain persistent data and should be backed up first:
+
+```powershell
+docker compose down
+Remove-Item -Recurse -Force .\data\evaluation\results -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .\data\runtime -ErrorAction SilentlyContinue  # destructive DB/index reset
+```
+
+Model weights under `data/model_cache` are also ignored but may be expensive to download again, so
+they are not part of the normal cleanup command.
 
 No API keys belong in the repository. Copy `.env.example` to `.env` and provide secrets locally.
 
@@ -473,4 +578,6 @@ No API keys belong in the repository. Copy `.env.example` to `.env` and provide 
   fallback thresholds may require domain-specific tuning.
 - Agent routing quality depends on the configured tool-calling model; deterministic validation
   constrains execution but does not guarantee that the model chooses the best approved tool.
-- Production hardening is not implemented.
+- Evidence score rejection is experimental and disabled until calibrated on a larger dataset.
+- Authentication, authorization, tenant isolation, malware scanning, rate limiting, distributed
+  jobs, and backup/restore automation remain future production work.

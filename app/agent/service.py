@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from time import perf_counter
 from typing import Any
 
-from app.agent.errors import AgentError, AgentStepLimitError
+from app.agent.errors import AgentError, AgentStepLimitError, AgentTimeoutError
 from app.agent.models import (
     AgentDebug,
     AgentRequest,
@@ -38,6 +39,13 @@ class AgentService:
         self._settings = settings
 
     async def run(self, request: AgentRequest) -> AgentResponse:
+        try:
+            async with asyncio.timeout(self._settings.agent_timeout_seconds):
+                return await self._run_bounded(request)
+        except TimeoutError as exc:
+            raise AgentTimeoutError(self._settings.agent_timeout_seconds) from exc
+
+    async def _run_bounded(self, request: AgentRequest) -> AgentResponse:
         total_started = perf_counter()
         max_steps = request.max_tool_steps or self._settings.agent_max_tool_steps
         if max_steps > self._settings.agent_max_tool_steps:
